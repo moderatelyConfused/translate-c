@@ -9,5 +9,9 @@ void g(int y) {
 // pub export fn g(arg_y: c_int) void {
 //     var y = arg_y;
 //     _ = &y;
-//     _ = if (y != 0) if (((y * @as(c_int, 2)) - @as(c_int, 1)) != 0) f(y) else f(y + @as(c_int, 1)) else f(y - @as(c_int, 1));
+//     if (y != 0) {
+//         if (((y * @as(c_int, 2)) - @as(c_int, 1)) != 0) {
+//             _ = f(y);
+//         } else _ = f(y + @as(c_int, 1));
+//     } else _ = f(y - @as(c_int, 1));
 // }

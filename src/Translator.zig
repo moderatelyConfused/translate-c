@@ -2853,26 +2853,20 @@ fn transCondExpr(
     const res_is_bool = conditional.qt.is(t.comp, .bool);
     const cond = try t.transBoolExpr(&cond_scope.base, conditional.cond);
 
-    // Translate all inside expressions as if we're using the result. This
-    // includes possible nested conditional expressions (which individually
-    // suppressing would cause syntax errors because the suppression is
-    // technically a statement).
-
-    var then_body = try t.transExpr(scope, conditional.then_expr, .used);
-    if (!res_is_bool and then_body.isBoolRes()) {
+    var then_body = try t.transExpr(scope, conditional.then_expr, used);
+    if (used == .unused) {
+        then_body = try ZigTag.block_single.create(t.arena, then_body);
+    } else if (!res_is_bool and then_body.isBoolRes()) {
         then_body = try ZigTag.int_from_bool.create(t.arena, then_body);
     }
 
-    var else_body = try t.transExpr(scope, conditional.else_expr, .used);
+    var else_body = try t.transExpr(scope, conditional.else_expr, used);
     if (!res_is_bool and else_body.isBoolRes()) {
         else_body = try ZigTag.int_from_bool.create(t.arena, else_body);
     }
 
-    // The result we suppress if need be.
-    return t.maybeSuppressResult(
-        used,
-        try ZigTag.@"if".create(t.arena, .{ .cond = cond, .then = then_body, .@"else" = else_body }),
-    );
+    // The `ResultUsed` is forwarded to both branches so no need to suppress the result here.
+    return ZigTag.@"if".create(t.arena, .{ .cond = cond, .then = then_body, .@"else" = else_body });
 }
 
 fn transBinaryCondExpr(
