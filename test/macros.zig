@@ -164,7 +164,7 @@ test "Macro that uses remainder operator" {
 }
 
 test "@typeInfo on translate-c result" {
-    try expect(@typeInfo(macros).@"struct".decl_names.len > 1);
+    try expect(@typeInfo(macros).@"struct".decls.len > 1);
 }
 
 test "Macro that uses Long type concatenation casting" {

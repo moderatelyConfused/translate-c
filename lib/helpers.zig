@@ -86,8 +86,8 @@ pub fn FlexibleArrayType(comptime SelfType: type, comptime ElementType: type) ty
     switch (@typeInfo(SelfType)) {
         .pointer => |ptr| {
             return @Pointer(.c, .{
-                .@"const" = ptr.attrs.@"const",
-                .@"volatile" = ptr.attrs.@"volatile",
+                .@"const" = ptr.is_const,
+                .@"volatile" = ptr.is_volatile,
                 .@"allowzero" = true,
                 .@"addrspace" = .generic,
                 .@"align" = null,
@@ -199,8 +199,8 @@ pub fn cast(comptime DestType: type, target: anytype) DestType {
             }
         },
         .@"union" => |info| {
-            inline for (info.field_names, info.field_types) |field_name, field_type| {
-                if (field_type == SourceType) return @unionInit(DestType, field_name, target);
+            inline for (info.fields) |field| {
+                if (field.type == SourceType) return @unionInit(DestType, field.name, target);
             }
 
             @compileError("cast to union type '" ++ @typeName(DestType) ++ "' from type '" ++ @typeName(SourceType) ++ "' which is not present in union");
@@ -295,7 +295,7 @@ pub fn sizeof(target: anytype) usize {
             // in the .array case above, but strings remain literals
             // and are therefore always pointers, so they need to be
             // specially handled here.
-            if (ptr.size == .one and ptr.attrs.@"const" and @typeInfo(ptr.child) == .array) {
+            if (ptr.size == .one and ptr.is_const and @typeInfo(ptr.child) == .array) {
                 const array_info = @typeInfo(ptr.child).array;
                 if ((array_info.child == u8 or array_info.child == u16) and array_info.sentinel() == 0) {
                     // length of the string plus one for the null terminator.

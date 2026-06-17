@@ -5,11 +5,18 @@ const Allocator = std.mem.Allocator;
 const process = std.process;
 const fatal = std.process.fatal;
 const Io = std.Io;
-const PkgConfig = std.zig.PkgConfig;
+const PkgConfig = @import("PkgConfig.zig");
 
 const aro = @import("aro");
 
 const Translator = @import("Translator.zig");
+
+const OptimizeMode = enum {
+    Debug,
+    ReleaseSafe,
+    ReleaseFast,
+    ReleaseSmall,
+};
 
 pub fn main(init: process.Init) !void {
     const gpa = init.gpa;
@@ -104,7 +111,7 @@ fn translate(
     var system_libs: std.ArrayList(SystemLib) = .empty;
     var any_want_pkg_conf = false;
     var any_force_pkg_conf = false;
-    var optimize_mode: std.lang.OptimizeMode = .Debug;
+    var optimize_mode: OptimizeMode = .Debug;
     var opt_zig_lib_path: ?[]const u8 = null;
 
     var aro_args: std.ArrayList([]const u8) = try .initCapacity(arena, args.len);
@@ -158,7 +165,7 @@ fn translate(
             aro_args.appendAssumeCapacity("-o");
             aro_args.appendAssumeCapacity(rest);
         } else if (mem.cutPrefix(u8, arg, "-O=")) |rest| {
-            optimize_mode = std.meta.stringToEnum(std.lang.OptimizeMode, rest) orelse
+            optimize_mode = std.meta.stringToEnum(OptimizeMode, rest) orelse
                 fatal("bad optimize mode: {s}", .{rest});
         } else if (mem.eql(u8, arg, "-lc")) {
             link_libc = true;
@@ -177,7 +184,7 @@ fn translate(
                 },
                 .name = rest[6..],
             });
-            switch (system_libs.last().?.options.use_pkg_config) {
+            switch (system_libs.items[system_libs.items.len - 1].options.use_pkg_config) {
                 .no => {},
                 .yes => any_want_pkg_conf = true,
                 .force => any_force_pkg_conf = true,
@@ -353,10 +360,15 @@ fn translate(
             .argv = &.{ pkg_config_exe, "--list-all" },
             .environ_map = environ_map,
         })) |result| {
-            if (result.term.success()) {
+            const success = switch (result.term) {
+                .exited => |code| code == 0,
+                else => false,
+            };
+            if (success) {
                 opt_pc = try PkgConfig.init(arena, result.stdout, null);
             } else if (any_force_pkg_conf) {
-                fatal("{s} {f}", .{ pkg_config_exe, result.term });
+                const term_formatter: ChildTermFormatter = .{ .t = result.term };
+                fatal("{s} {f}", .{ pkg_config_exe, term_formatter });
             }
         } else |err| {
             if (any_force_pkg_conf) fatal("{s}: failed running --list-all: {t}", .{ pkg_config_exe, err });
@@ -549,7 +561,7 @@ comptime {
 const SystemLib = struct {
     name: []const u8,
     options: std.Build.Module.LinkSystemLibraryOptions,
-    pkg_conf: ?std.zig.PkgConfig.Parsed = null,
+    pkg_conf: ?PkgConfig.Parsed = null,
 };
 
 fn runPkgConfig(
@@ -566,7 +578,7 @@ fn runPkgConfig(
     };
 
     const lib_name = system_lib.name;
-    const pkg_config_exe = std.zig.PkgConfig.exe(environ_map);
+    const pkg_config_exe = PkgConfig.exe(environ_map);
     const found_index = pc.find(lib_name) orelse {
         if (force) fatal("{s}: package not found: {s}", .{ pkg_config_exe, lib_name });
         return;
@@ -580,13 +592,20 @@ fn runPkgConfig(
         if (force) fatal("failed running {s}: {t}", .{ pkg_config_exe, err });
         return;
     };
-    if (!result.term.success()) {
+    const success = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!success) {
         if (result.stderr.len != 0) std.log.err("{s}: {s}", .{ pkg_config_exe, result.stderr });
-        if (force) fatal("{s} {f}", .{ pkg_config_exe, result.term });
+        if (force) {
+            const term_formatter: ChildTermFormatter = .{ .t = result.term };
+            fatal("{s} {f}", .{ pkg_config_exe, term_formatter });
+        }
         return;
     }
 
-    const parsed = std.zig.PkgConfig.parse(arena, result.stdout) catch |err| switch (err) {
+    const parsed = PkgConfig.parse(arena, result.stdout) catch |err| switch (err) {
         error.InvalidPkgConfigOutput => {
             if (force) return fatal("{s} package {s} invalid output: {s}", .{
                 pkg_config_exe, pkg.name, result.stdout,
@@ -612,3 +631,16 @@ fn runPkgConfig(
 
     system_lib.pkg_conf = parsed;
 }
+
+const ChildTermFormatter = struct {
+    t: std.process.Child.Term,
+
+    pub fn format(self: ChildTermFormatter, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        switch (self.t) {
+            .exited => |code| return w.print("exited with code {d}", .{code}),
+            .signal => |sig| return w.print("terminated with signal {t}", .{sig}),
+            .stopped => |sig| return w.print("stopped with signal {t}", .{sig}),
+            .unknown => return w.writeAll("terminated unexpectedly"),
+        }
+    }
+};

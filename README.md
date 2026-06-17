@@ -3,8 +3,7 @@
 A Zig package for translating C code into Zig code, intended to replace
 `@cImport` and `zig translate-c`.
 
-**This is the main branch, which tracks master branch of Zig. Other branches
-track other versions of Zig.**
+This branch tracks Zig 0.16.x. Other branches track other versions of Zig.
 
 ## Usage
 
@@ -12,7 +11,6 @@ Add `translate-c` to your `build.zig.zon` with this command:
 
 ```
 $ zig fetch --save git+https://codeberg.org/ziglang/translate-c
-info: resolved to commit 1aa9ec052415feeaa0494190ae35a94849a24399
 ```
 
 Then, within your `build.zig`, write something like this:
@@ -41,27 +39,5 @@ For a more complete usage, take a look at the `examples/` directory.
 
 ## Options
 
-```zig
-/// Should static functions be translated as `pub`.
-pub_static: bool,
-/// Should function bodies be translated.
-func_bodies: bool,
-/// Should macro names of literals be preserved.
-keep_macro_literals: bool,
-/// Should struct fields be default initialized.
-default_init: bool,
-/// Control when to treat a trailing array as a flexible array member.
-/// Mirrors the -fstrict-flex-arrays=<n> compiler flag.
-strict_flex_arrays: StrictFlexArraysLevel,
-
-pub const StrictFlexArraysLevel = enum {
-    /// Any trailing array member is a flexible array.
-    @"0",
-    /// Trailing arrays of size 0, 1, or undefined are flexible.
-    @"1",
-    /// Trailing arrays of size 0 or undefined are flexible (default).
-    @"2",
-    /// Only trailing arrays of undefined size are flexible.
-    @"3",
-};
-```
+The options for the [`build/Translator.zig`](build/Translator.zig) abstraction
+are in heavy development. Please see the file directly for more details.

@@ -54,7 +54,8 @@ pub fn lowerCases(
         break :targets &targets_buf;
     };
 
-    var dir = b.root.openDir(io, "test/cases", .{ .iterate = true }) catch |err| {
+    const test_case_dir = b.build_root.join(b.allocator, &.{"test/cases"}) catch unreachable;
+    var dir = std.Io.Dir.openDirAbsolute(io, test_case_dir, .{ .iterate = true }) catch |err| {
         const fail_step = b.addFail(b.fmt("unable to open test/cases: {s}", .{@errorName(err)}));
         test_translate_step.dependOn(&fail_step.step);
         test_run_translated_step.dependOn(&fail_step.step);

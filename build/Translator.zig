@@ -55,6 +55,12 @@ pub const Options = struct {
     c_source_file: Build.LazyPath,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    /// Path to the Zig `lib` directory. MUST be the same path as the Zig
+    /// binary being used to execute the build. There is currently no way to
+    /// discover this in Zig 0.16.0, so this needs to come from the `.lib_dir`
+    /// attribute of the output of `zig env`. This command will be run if no
+    /// library is supplied.
+    zig_lib_dir: ?[]const u8 = null,
     link_libc: bool = true,
     /// Makes the translated module link to the provided system libraries, and
     /// includes any corresponding library headers during translation.
@@ -97,7 +103,8 @@ pub fn initInner(
     options: Options,
 ) Translator {
     // Try our best to get a reasonable name; we need one to name the steps and the output file.
-    const name = options.name orelse std.fs.path.stem(b.fmt("{f}", .{options.c_source_file}));
+    // const name = options.name orelse std.fs.path.stem(b.fmt("{f}", .{options.c_source_file}));
+    const name = options.name orelse options.c_source_file.basename(b, null);
 
     // We start with the basic command: 'path/to/translate-c in.c -o out.zig -MD -MV -MF deps.d'
     const run = b.addRunArtifact(tc_conf.exe);
@@ -132,7 +139,10 @@ pub fn initInner(
         }));
     }
 
-    run.addPrefixedDirectoryArg("--zig-lib=", .zig_lib);
+    run.addPrefixedDirectoryArg("--zig-lib=", .{
+        .cwd_relative = options.zig_lib_dir orelse zigLibDir(b) catch |err|
+            std.process.fatal("cannot discover Zig lib dir: {}", .{err}),
+    });
 
     addFlag(run, "module-libs", options.module_libs);
     addFlag(run, "pub-static", options.pub_static);
@@ -247,4 +257,28 @@ fn addFlag(run: *Build.Step.Run, name: []const u8, opt_value: ?bool) void {
 fn appendIncludeArg(run: *Build.Step.Run, arg: []const u8, path: Build.LazyPath) void {
     run.addArg(arg);
     run.addDirectoryArg(path);
+}
+
+/// Helper function to get `.lib_dir`, in Zig 0.16.0, calls out to Zig binary
+/// in env to get it. Only called if a lib_dir is not supplied, so if the Zig
+/// binary in the system path is not the correct one, it can just be supplied
+/// directly.
+///
+/// Uses the build allocator, so the returned string should be available for
+/// the lifetime of the build.
+fn zigLibDir(b: *std.Build) ![]const u8 {
+    const Env = struct {
+        lib_dir: []const u8,
+    };
+    const env_outz = try b.allocator.dupeZ(u8, b.run(&.{ "zig", "env" }));
+    defer b.allocator.free(env_outz);
+    const env_zon: Env = try std.zon.parse.fromSliceAlloc(
+        Env,
+        b.allocator,
+        env_outz,
+        null,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer std.zon.parse.free(b.allocator, env_zon);
+    return try b.allocator.dupe(u8, env_zon.lib_dir);
 }
