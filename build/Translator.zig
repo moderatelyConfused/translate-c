@@ -119,6 +119,10 @@ pub fn initInner(
         .link_libc = options.link_libc,
     });
 
+    if (options.optimize != .Debug) {
+        run.addArg(b.fmt("-O={t}", .{options.optimize}));
+    }
+
     if (!options.target.query.isNative()) {
         const triple = options.target.query.zigTriple(b.graph.arena) catch @panic("OOM");
         run.addArg(b.fmt("--target={s}", .{triple}));
