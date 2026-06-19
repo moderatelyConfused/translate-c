@@ -19,10 +19,7 @@ Then, within your `build.zig`, write something like this:
 // An abstraction to make using translate-c as simple as possible.
 const Translator = @import("translate_c").Translator;
 
-const translate_c = b.dependency("translate_c", .{
-    // Compile translate-c exe in release mode.
-    .optimize = .ReleaseSafe,
-});
+const translate_c = b.dependency("translate_c", .{});
 
 const t: Translator = .init(translate_c, .{
     .c_source_file = b.path("to_translate.h"),

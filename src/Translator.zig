@@ -2,7 +2,6 @@ const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
 const CallingConvention = std.builtin.CallingConvention;
-pub const Error = std.mem.Allocator.Error;
 
 const aro = @import("aro");
 const CToken = aro.Tokenizer.Token;
@@ -60,6 +59,7 @@ pub const QualTypeHashContext = struct {
     }
 };
 
+pub const Error = std.mem.Allocator.Error;
 pub const MacroProcessingError = Error || error{UnexpectedMacroToken};
 pub const TypeError = Error || error{UnsupportedType};
 pub const TransError = TypeError || error{ UnsupportedTranslation, SelfReferential };

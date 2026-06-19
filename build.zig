@@ -9,6 +9,10 @@ pub fn build(b: *std.Build) void {
     const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
     const use_llvm = b.option(bool, "llvm", "Use LLVM backend to generate aro executable");
     const link_libc = b.option(bool, "link-libc", "Link libc") orelse (optimize != .Debug);
+    const debug_allocations = b.option(bool, "debug-allocations", "Collect detailed debug info for all allocations (slow)") orelse false;
+
+    const options = b.addOptions();
+    options.addOption(bool, "debug_allocations", debug_allocations);
 
     const aro = b.dependency("aro", .{
         .target = target,
@@ -31,6 +35,7 @@ pub fn build(b: *std.Build) void {
     translate_c_module.addImport("aro", aro.module("aro"));
     translate_c_module.addImport("helpers", helpers);
     translate_c_module.addImport("c_builtins", c_builtins);
+    translate_c_module.addImport("build_options", options.createModule());
 
     if (target.result.os.tag == .windows) {
         translate_c_module.linkSystemLibrary("advapi32", .{});

@@ -9,6 +9,8 @@ const PkgConfig = @import("PkgConfig.zig");
 
 const aro = @import("aro");
 
+const build_options = @import("build_options");
+
 const Translator = @import("Translator.zig");
 
 const OptimizeMode = enum {
@@ -18,9 +20,28 @@ const OptimizeMode = enum {
     ReleaseSmall,
 };
 
+var safe_allocator: std.heap.DebugAllocator(.{
+    .stack_trace_frames = if (build_options.debug_allocations and std.debug.sys_can_stack_trace) 10 else 0,
+    .resize_stack_traces = build_options.debug_allocations,
+    // A unique value so that when a default-constructed
+    // GeneralPurposeAllocator is incorrectly passed to testing allocator, or
+    // vice versa, panic occurs.
+    .canary = @truncate(0x8cffe9c54f0bcc72),
+}) = .{};
+
 pub fn main(init: process.Init) !void {
-    const gpa = init.gpa;
-    const arena = init.arena.allocator();
+    const gpa = if (@import("builtin").link_libc)
+        std.heap.c_allocator
+    else
+        safe_allocator.allocator();
+    defer if (!@import("builtin").link_libc) {
+        _ = safe_allocator.deinit();
+    };
+
+    var arena_instance = std.heap.ArenaAllocator.init(gpa);
+    defer arena_instance.deinit();
+    const arena = arena_instance.allocator();
+
     const io = init.io;
     const args = try init.minimal.args.toSlice(arena);
 
