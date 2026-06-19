@@ -607,7 +607,7 @@ fn runPkgConfig(
     const pkg = pc.all[found_index];
 
     const result = process.run(arena, io, .{
-        .argv = &.{ pkg_config_exe, pkg.name, "--cflags", "--libs" },
+        .argv = &.{ pkg_config_exe, pkg.name, "--cflags-only-I", "--libs" },
         .environ_map = environ_map,
     }) catch |err| {
         if (force) fatal("failed running {s}: {t}", .{ pkg_config_exe, err });
