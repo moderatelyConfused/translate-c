@@ -121,7 +121,11 @@ pub fn lowerCases(
                     test_translate_step.dependOn(&check_file.step);
                 },
                 .run => |output| {
-                    const exe = b.addExecutable(.{ .name = case.name, .root_module = translator.mod });
+                    const exe = b.addExecutable(.{
+                        .name = case.name,
+                        .root_module = translator.mod,
+                        .max_rss = 1_000_000_000,
+                    });
                     const run = b.addRunArtifact(exe);
                     run.step.name = b.fmt("run-translated {s}", .{name_and_triple});
                     run.expectStdOutEqual(output);
