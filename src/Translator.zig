@@ -106,8 +106,10 @@ global_scope: *Scope.Root,
 /// Running number used for creating new unique identifiers.
 mangle_count: u32 = 0,
 
-/// Table of declarations for enum, struct, union and typedef types.
-type_decls: std.AutoArrayHashMapUnmanaged(Node.Index, []const u8) = .empty,
+/// Typedef decl to translated decl identifier.
+typedef_decls: std.AutoArrayHashMapUnmanaged(Node.Index, []const u8) = .empty,
+/// Enum, struct and union type to translated decl identifier.
+container_types: std.AutoArrayHashMapUnmanaged(QualType, []const u8) = .empty,
 /// Table of record decls that have been demoted to opaques.
 opaque_demotes: std.HashMapUnmanaged(QualType, void, QualTypeHashContext, std.hash_map.default_max_load_percentage) = .empty,
 /// Table of unnamed enums and records that are child types of typedefs.
@@ -272,7 +274,8 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
     };
     translator.global_scope.* = Scope.Root.init(&translator);
     defer {
-        translator.type_decls.deinit(gpa);
+        translator.typedef_decls.deinit(gpa);
+        translator.container_types.deinit(gpa);
         translator.alias_list.deinit(gpa);
         translator.global_names.deinit(gpa);
         translator.weak_global_names.deinit(gpa);
@@ -360,7 +363,7 @@ fn prepopulateGlobalNameTable(t: *Translator) !void {
                     continue;
                 }
                 gop.value_ptr.* = decl_name;
-                try t.type_decls.put(t.gpa, decl, decl_name);
+                try t.typedef_decls.put(t.gpa, decl, decl_name);
                 try t.typedefs.put(t.gpa, decl_name, {});
             },
 
@@ -470,7 +473,7 @@ fn transDecl(t: *Translator, scope: *Scope, decl: Node.Index) !void {
             // dependent analysis, we cannot safely emit the definition yet, since we
             // first need to translate any declarations that appear before the definition.
             if (function.definition == null) {
-                try t.transFnDecl(scope, function);
+                try t.transFnDecl(scope, function, decl);
             }
         },
 
@@ -506,7 +509,7 @@ pub const builtin_typedef_map = std.StaticStringMap([]const u8).initComptime(.{
 
 fn transTypeDef(t: *Translator, scope: *Scope, typedef_node: Node.Index) Error!void {
     const typedef_decl = typedef_node.get(t.tree).typedef;
-    if (t.type_decls.get(typedef_node)) |_|
+    if (t.typedef_decls.get(typedef_node)) |_|
         return; // Avoid processing this decl twice
 
     const toplevel = scope.id == .root;
@@ -516,10 +519,10 @@ fn transTypeDef(t: *Translator, scope: *Scope, typedef_node: Node.Index) Error!v
     try t.typedefs.put(t.gpa, name, {});
 
     if (builtin_typedef_map.get(name)) |builtin| {
-        return t.type_decls.putNoClobber(t.gpa, typedef_node, builtin);
+        return t.typedef_decls.putNoClobber(t.gpa, typedef_node, builtin);
     }
     if (!toplevel) name = try bs.makeMangledName(name);
-    try t.type_decls.putNoClobber(t.gpa, typedef_node, name);
+    try t.typedef_decls.putNoClobber(t.gpa, typedef_node, name);
 
     const typedef_loc = typedef_decl.name_tok;
     const init_node = t.transType(scope, typedef_decl.qt, typedef_loc) catch |err| switch (err) {
@@ -569,7 +572,7 @@ fn transRecordDecl(t: *Translator, scope: *Scope, record_qt: QualType) Error!voi
         else => unreachable,
     };
 
-    if (t.type_decls.get(record_ty.decl_node)) |_|
+    if (t.container_types.get(base.qt.unqualified())) |_|
         return; // Avoid processing this decl twice
 
     const toplevel = scope.id == .root;
@@ -596,7 +599,7 @@ fn transRecordDecl(t: *Translator, scope: *Scope, record_qt: QualType) Error!voi
         }
     }
     if (!toplevel) name = try bs.makeMangledName(name);
-    try t.type_decls.putNoClobber(t.gpa, record_ty.decl_node, name);
+    try t.container_types.putNoClobber(t.gpa, base.qt.unqualified(), name);
 
     const is_pub = toplevel and !is_unnamed;
     const init_node = init: {
@@ -752,7 +755,7 @@ fn transRecordDecl(t: *Translator, scope: *Scope, record_qt: QualType) Error!voi
     }
 }
 
-fn transFnDecl(t: *Translator, scope: *Scope, function: Node.Function) Error!void {
+fn transFnDecl(t: *Translator, scope: *Scope, function: Node.Function, decl_node: Node.Index) Error!void {
     const func_ty = function.qt.get(t.comp, .func).?;
 
     const fn_name = t.tree.tokSlice(function.name_tok);
@@ -765,7 +768,7 @@ fn transFnDecl(t: *Translator, scope: *Scope, function: Node.Function) Error!voi
         try t.warn(scope, function.name_tok, "TODO unable to translate variadic function, demoted to extern", .{});
     }
 
-    const is_always_inline = has_body and function.qt.getAttribute(t.comp, .always_inline) != null;
+    const is_always_inline = has_body and t.tree.attr_map.getAttribute(decl_node, .always_inline) != null;
     const proto_ctx: FnProtoContext = .{
         .fn_name = fn_name,
         .is_always_inline = is_always_inline,
@@ -773,25 +776,37 @@ fn transFnDecl(t: *Translator, scope: *Scope, function: Node.Function) Error!voi
         .is_export = !function.static and has_body and !is_always_inline and !function.@"inline",
         .is_pub = scope.id == .root and (!function.static or t.pub_static),
         .has_body = has_body,
-        .cc = if (function.qt.getAttribute(t.comp, .calling_convention)) |some| switch (some.cc) {
-            .c => .c,
+        .cc = switch (func_ty.cc) {
+            .default => .c,
+            .cdecl => .c,
             .stdcall => .x86_stdcall,
             .thiscall => .x86_thiscall,
             .fastcall => .x86_fastcall,
             .regcall => .x86_regcall,
-            .riscv_vector => .riscv_vector,
+            .riscv_vector_cc => switch (t.comp.target.cpu.arch) {
+                .riscv32, .riscv32be => .riscv32_ilp32_v,
+                .riscv64, .riscv64be => .riscv64_lp64_v,
+                else => unreachable,
+            },
+            .riscv_vls_cc => return t.failDecl(scope, fn_decl_loc, fn_name, "TODO riscv_vls_cc", .{}),
             .aarch64_sve_pcs => .aarch64_sve_pcs,
             .aarch64_vector_pcs => .aarch64_vfabi,
             .arm_aapcs => .arm_aapcs,
             .arm_aapcs_vfp => .arm_aapcs_vfp,
             .vectorcall => switch (t.comp.target.cpu.arch) {
                 .x86 => .x86_vectorcall,
+                .x86_64 => .x86_64_vectorcall,
                 .aarch64, .aarch64_be => .aarch64_vfabi,
                 else => .c,
             },
-            .x86_64_sysv => .x86_64_sysv,
-            .x86_64_win => .x86_64_win,
-        } else .c,
+            .ms_abi => switch (t.comp.target.cpu.arch) {
+                .x86_64 => .x86_64_win,
+                .aarch64, .aarch64_be => .aarch64_aapcs_win,
+                else => .c,
+            },
+            .sysv_abi => .x86_64_sysv,
+        },
+        .decl_node = .pack(decl_node),
     };
 
     const proto_node = t.transFnType(&t.global_scope.base, function.qt, func_ty, fn_decl_loc, proto_ctx) catch |err| switch (err) {
@@ -955,20 +970,15 @@ fn transVarDecl(t: *Translator, scope: *Scope, variable: Node.Variable, decl_nod
         break :init ZigTag.undefined_literal.init();
     };
 
-    const linksection_string = blk: {
-        if (variable.qt.getAttribute(t.comp, .section)) |section| {
-            break :blk t.comp.interner.get(section.name.ref()).bytes;
-        }
-        break :blk null;
-    };
+    const linksection_string = if (t.tree.attr_map.getAttribute(decl_node, .section)) |attr| attr.args.section else null;
 
     // TODO actually set with @export/@extern
-    const linkage = variable.qt.linkage(t.comp);
+    const linkage = .strong; // variable.qt.linkage(t.comp);
     if (linkage != .strong) {
         try t.warn(scope, variable.name_tok, "TODO {s} linkage ignored", .{@tagName(linkage)});
     }
 
-    const alignment: ?c_uint = variable.qt.requestedAlignment(t.comp) orelse null;
+    const alignment: ?c_uint = t.tree.attr_map.requestedAlignment(decl_node, t.comp) orelse null;
     var node = try ZigTag.var_decl.create(t.arena, .{
         .is_pub = toplevel,
         .is_const = is_const and !self_referential,
@@ -1006,8 +1016,9 @@ fn transVarDecl(t: *Translator, scope: *Scope, variable: Node.Variable, decl_nod
         }
         try bs.discardVariable(name);
 
-        if (variable.qt.getAttribute(t.comp, .cleanup)) |cleanup_attr| {
-            const cleanup_fn_name = t.tree.tokSlice(cleanup_attr.function.tok);
+        if (t.tree.attr_map.getAttribute(decl_node, .cleanup)) |attr| {
+            const cleanup_func = attr.args.cleanup.function;
+            const cleanup_fn_name = t.tree.tokSlice(cleanup_func.tok(t.tree));
             const mangled_fn_name = scope.getAlias(cleanup_fn_name) orelse cleanup_fn_name;
             const fn_id = try ZigTag.identifier.create(t.arena, mangled_fn_name);
 
@@ -1028,7 +1039,7 @@ fn transEnumDecl(t: *Translator, scope: *Scope, enum_qt: QualType) Error!void {
     const base = enum_qt.base(t.comp);
     const enum_ty = base.type.@"enum";
 
-    if (t.type_decls.get(enum_ty.decl_node)) |_|
+    if (t.container_types.get(base.qt.unqualified())) |_|
         return; // Avoid processing this decl twice
 
     const toplevel = scope.id == .root;
@@ -1048,7 +1059,7 @@ fn transEnumDecl(t: *Translator, scope: *Scope, enum_qt: QualType) Error!void {
         name = try std.fmt.allocPrint(t.arena, "enum_{s}", .{bare_name});
     }
     if (!toplevel) name = try bs.makeMangledName(name);
-    try t.type_decls.putNoClobber(t.gpa, enum_ty.decl_node, name);
+    try t.container_types.putNoClobber(t.gpa, base.qt.unqualified(), name);
 
     const enum_type_node = if (!base.qt.hasIncompleteSize(t.comp)) blk: {
         const enum_decl = enum_ty.decl_node.get(t.tree).enum_decl;
@@ -1170,7 +1181,7 @@ fn getTypeStr(t: *Translator, qt: QualType) ![]const u8 {
 }
 
 fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex) TypeError!ZigNode {
-    loop: switch (qt.type(t.comp)) {
+    switch (qt.type(t.comp)) {
         .atomic => {
             const type_name = try t.getTypeStr(qt);
             return t.fail(error.UnsupportedType, source_loc, "TODO support atomic type: '{s}'", .{type_name});
@@ -1256,7 +1267,7 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
                 if (t.weak_global_names.contains(record_ty.name.lookup(t.comp))) trans_scope = &t.global_scope.base;
             }
             try t.transRecordDecl(trans_scope, qt);
-            const name = t.type_decls.get(record_ty.decl_node).?;
+            const name = t.container_types.get(qt.unqualified()).?;
             return ZigTag.identifier.create(t.arena, name);
         },
         .@"enum" => |enum_ty| {
@@ -1266,7 +1277,7 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
                 if (t.weak_global_names.contains(enum_ty.name.lookup(t.comp))) trans_scope = &t.global_scope.base;
             }
             try t.transEnumDecl(trans_scope, qt);
-            const name = t.type_decls.get(enum_ty.decl_node).?;
+            const name = t.container_types.get(qt.unqualified()).?;
             return ZigTag.identifier.create(t.arena, name);
         },
         .typedef => |typedef_ty| {
@@ -1276,10 +1287,9 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
             if (t.global_names.contains(typedef_name)) trans_scope = &t.global_scope.base;
 
             try t.transTypeDef(trans_scope, typedef_ty.decl_node);
-            const name = t.type_decls.get(typedef_ty.decl_node).?;
+            const name = t.typedef_decls.get(typedef_ty.decl_node).?;
             return ZigTag.identifier.create(t.arena, name);
         },
-        .attributed => |attributed_ty| continue :loop attributed_ty.base.type(t.comp),
         .typeof => |typeof_ty| {
             if (typeof_ty.expr) |expr| {
                 if (t.transExpr(scope, expr, .used)) |node| {
@@ -1291,7 +1301,7 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
                     error.OutOfMemory => return error.OutOfMemory,
                 }
             }
-            continue :loop typeof_ty.base.type(t.comp);
+            return t.transType(scope, typeof_ty.base, source_loc);
         },
         .vector => |vector_ty| {
             const len = try t.createNumberNode(vector_ty.len);
@@ -1416,6 +1426,7 @@ const FnProtoContext = struct {
     fn_name: ?[]const u8 = null,
     has_body: bool = false,
     cc: ast.Payload.Func.CallingConvention = .c,
+    decl_node: Node.OptIndex = .null,
 };
 
 fn transFnType(
@@ -1426,6 +1437,7 @@ fn transFnType(
     source_loc: TokenIndex,
     ctx: FnProtoContext,
 ) !ZigNode {
+    _ = func_qt; // autofix
     const param_count: usize = func_ty.params.len;
     const fn_params = try t.arena.alloc(ast.Payload.Param, param_count);
 
@@ -1446,19 +1458,14 @@ fn transFnType(
         };
     }
 
-    const linksection_string = blk: {
-        if (func_qt.getAttribute(t.comp, .section)) |section| {
-            break :blk t.comp.interner.get(section.name.ref()).bytes;
-        }
-        break :blk null;
-    };
+    const linksection_string = if (t.tree.attr_map.getAttribute(ctx.decl_node, .section)) |attr| attr.args.section else null;
 
-    const alignment: ?c_uint = func_qt.requestedAlignment(t.comp) orelse null;
+    const alignment: ?c_uint = t.tree.attr_map.requestedAlignment(ctx.decl_node, t.comp) orelse null;
 
     const explicit_callconv = if ((ctx.is_always_inline or ctx.is_export or ctx.is_extern) and ctx.cc == .c) null else ctx.cc;
 
     const return_type_node = blk: {
-        if (func_qt.getAttribute(t.comp, .noreturn) != null) {
+        if (t.tree.attr_map.getAttribute(ctx.decl_node, .noreturn) != null) {
             break :blk ZigTag.noreturn_type.init();
         } else {
             const return_qt = func_ty.return_type;
@@ -1478,7 +1485,7 @@ fn transFnType(
     };
 
     // TODO actually set with @export/@extern
-    const linkage = func_qt.linkage(t.comp);
+    const linkage = .strong; //func_qt.linkage(t.comp);
     if (linkage != .strong) {
         try t.warn(scope, source_loc, "TODO {s} linkage ignored", .{@tagName(linkage)});
     }
@@ -1663,7 +1670,7 @@ fn transStmt(t: *Translator, scope: *Scope, stmt: Node.Index) TransError!ZigNode
             return ZigTag.declaration.init();
         },
         .function => |function| {
-            try t.transFnDecl(scope, function);
+            try t.transFnDecl(scope, function, stmt);
             return ZigTag.declaration.init();
         },
         .variable => |variable| {
@@ -2360,6 +2367,8 @@ fn transExpr(t: *Translator, scope: *Scope, expr: Node.Index, used: ResultUsed) 
         .enum_forward_decl,
         .empty_decl,
         .codegen_diagnostic,
+        .alignas_type,
+        .identifier_arg,
         => unreachable, // not an expression
     });
 }
@@ -2738,7 +2747,7 @@ fn transDeclRefExpr(t: *Translator, scope: *Scope, decl_ref: Node.DeclRef) Trans
     switch (decl_ref.decl.get(t.tree)) {
         .function => |function| if (function.definition == null and function.body == null) {
             // Try translating the decl again in case of out of scope declaration.
-            try t.transFnDecl(scope, function);
+            try t.transFnDecl(scope, function, decl_ref.decl);
         },
         else => {},
     }
