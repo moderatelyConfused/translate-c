@@ -40,11 +40,11 @@ jobs:
       - ${{ matrix.host }}
 
     steps:
-      # - name: Checkout
-      #   uses: https://codeberg.org/ziglang/checkout@19af6bac491e2534a4687a50ee84fa7f13258d28
+      - name: Checkout
+        uses: https://codeberg.org/ziglang/checkout@19af6bac491e2534a4687a50ee84fa7f13258d28
 
-      # - name: Setup Zig
-      #   uses: https://codeberg.org/mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+      - name: Setup Zig
+        uses: https://codeberg.org/mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
 
       # - name: Build
       #   run: zig build --maxrss ${{ env.ZSF_MAX_RSS }}
