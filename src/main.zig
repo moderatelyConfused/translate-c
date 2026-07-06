@@ -322,7 +322,7 @@ fn translate(
     const libc_dirs = std.zig.LibCDirs.detect(
         arena,
         io,
-        .initCwd(zig_lib_path),
+        zig_lib_path,
         &target,
         is_native_abi,
         link_libc,
