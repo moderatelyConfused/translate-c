@@ -76,4 +76,4 @@ jobs:
       #   run: zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug -Dtest-cross-targets
 
       - name: Run Examples
-        run: zig build -l --maxrss ${{ env.ZSF_MAX_RSS }} --build-file examples/build.zig
+        run: zig build all --maxrss ${{ env.ZSF_MAX_RSS }} --build-file examples/build.zig
