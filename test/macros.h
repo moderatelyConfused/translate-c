@@ -96,3 +96,10 @@ static int check(int x) {
 
 #define CONDEXPR_MACRO(x) \
     (check(x) ? 1 : 0)
+
+int too_short(unsigned short i) {
+    return i;
+}
+
+#define in_macro() \
+	too_short(0xF000)

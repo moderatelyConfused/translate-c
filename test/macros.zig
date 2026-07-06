@@ -183,3 +183,7 @@ test "condexpr macro" {
     try expectEqual(@as(c_int, 0), macros.CONDEXPR_MACRO(0));
     try expectEqual(@as(c_int, 1), macros.CONDEXPR_MACRO(42));
 }
+
+test "int constant promotion to too large type" {
+    try expectEqual(@as(c_int, 0xF000), macros.in_macro());
+}

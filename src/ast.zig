@@ -614,6 +614,7 @@ pub const Payload = struct {
             c,
             x86_64_sysv,
             x86_64_win,
+            x86_64_vectorcall,
             x86_stdcall,
             x86_fastcall,
             x86_thiscall,
@@ -621,10 +622,12 @@ pub const Payload = struct {
             x86_regcall,
             aarch64_vfabi,
             aarch64_sve_pcs,
+            aarch64_aapcs_win,
             arm_aapcs,
             arm_aapcs_vfp,
             m68k_rtd,
-            riscv_vector,
+            riscv32_ilp32_v,
+            riscv64_lp64_v,
         };
     };
 
@@ -645,7 +648,7 @@ pub const Payload = struct {
         pub const Field = struct {
             name: []const u8,
             type: Node,
-            alignment: ?c_uint,
+            alignment: ?usize,
             default_value: ?Node,
         };
     };
@@ -2894,6 +2897,7 @@ fn renderFunc(c: *Context, node: Node) !NodeIndex {
             },
             .x86_64_sysv,
             .x86_64_win,
+            .x86_64_vectorcall,
             .x86_stdcall,
             .x86_fastcall,
             .x86_thiscall,
@@ -2901,10 +2905,12 @@ fn renderFunc(c: *Context, node: Node) !NodeIndex {
             .x86_regcall,
             .aarch64_vfabi,
             .aarch64_sve_pcs,
+            .aarch64_aapcs_win,
             .arm_aapcs,
             .arm_aapcs_vfp,
             .m68k_rtd,
-            .riscv_vector,
+            .riscv32_ilp32_v,
+            .riscv64_lp64_v,
             => cc_node: {
                 // .{ .foo = .{} }
                 _ = try c.addToken(.period, ".");

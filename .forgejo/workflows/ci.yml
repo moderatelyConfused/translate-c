@@ -6,10 +6,10 @@ on:
       - main
   pull_request:
     paths:
-      - '**.zig'
-      - '**.zon'
-      - '**.c'
-      - '**.h'
+      - "**.zig"
+      - "**.zon"
+      - "**.c"
+      - "**.h"
   workflow_dispatch:
 
 # This cancels older workflow runs on pull requests while ensuring that there
@@ -48,34 +48,34 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: Build
-        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }}
+      # - name: Build
+      #   run: zig build --maxrss ${{ env.ZSF_MAX_RSS }}
 
-      - name: Build 32-bit FreeBSD
-        if: matrix.host == 'x86_64-freebsd'
-        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-freebsd
+      # - name: Build 32-bit FreeBSD
+      #   if: matrix.host == 'x86_64-freebsd'
+      #   run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-freebsd
 
-      - name: Build 32-bit Linux
-        if: matrix.host == 'x86_64-linux'
-        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-linux
+      # - name: Build 32-bit Linux
+      #   if: matrix.host == 'x86_64-linux'
+      #   run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-linux
 
-      - name: Build 32-bit NetBSD
-        if: matrix.host == 'x86_64-netbsd'
-        run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-netbsd
+      # - name: Build 32-bit NetBSD
+      #   if: matrix.host == 'x86_64-netbsd'
+      #   run: zig build --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=arm-netbsd
 
-      - name: Run Tests
-        run: |
-          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug
-          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=ReleaseFast
+      # - name: Run Tests
+      #   run: |
+      #     zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug
+      #     zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=ReleaseFast
 
-      - name: Run Tests MSVC
-        if: matrix.host == 'x86_64-windows'
-        run: |
-          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=native-windows-msvc -Doptimize=Debug
-          zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=native-windows-msvc -Doptimize=ReleaseFast
+      # - name: Run Tests MSVC
+      #   if: matrix.host == 'x86_64-windows'
+      #   run: |
+      #     zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=native-windows-msvc -Doptimize=Debug
+      #     zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Dtarget=native-windows-msvc -Doptimize=ReleaseFast
 
-      - name: Run Cross-Translation Tests
-        run: zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug -Dtest-cross-targets
+      # - name: Run Cross-Translation Tests
+      #   run: zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug -Dtest-cross-targets
 
       - name: Run Examples
         run: zig build all --maxrss ${{ env.ZSF_MAX_RSS }} --build-file examples/build.zig

@@ -9,8 +9,8 @@
 
     .dependencies = .{
         .aro = .{
-            .url = "https://github.com/vancluever/arocc/archive/c32de628ac29c765f8794e86374810ae5fb5c115.tar.gz",
-            .hash = "aro-0.0.0-JSD1QrExOgBF8ySFOvEaZfP1LBTjgwg58Y7UHoGJ3nOd",
+            .url = "https://github.com/vancluever/arocc/archive/d8bc7b0c7dec797a49fd793eb22a645cec2a1bcb.tar.gz",
+            .hash = "aro-0.0.0-JSD1Qj8oOQAESXhRrtSqWGPnVm9-Tmcw6q8sQjWzr1fB",
         },
     },
 
