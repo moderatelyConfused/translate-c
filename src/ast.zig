@@ -150,10 +150,6 @@ pub const Node = extern union {
 
         /// @byteSwap(operand)
         byte_swap,
-        /// @clz(operand)
-        clz,
-        /// @ctz(operand)
-        ctz,
         /// @ceil(operand)
         ceil,
         /// @cos(operand)
@@ -308,8 +304,6 @@ pub const Node = extern union {
                 .const_cast,
                 .volatile_cast,
                 .byte_swap,
-                .clz,
-                .ctz,
                 .ceil,
                 .cos,
                 .sin,
@@ -1493,14 +1487,6 @@ fn renderNode(c: *Context, node: Node) Allocator.Error!NodeIndex {
             const payload = node.castTag(.byte_swap).?.data;
             return renderBuiltinCall(c, "@byteSwap", &.{payload});
         },
-        .clz => {
-            const payload = node.castTag(.clz).?.data;
-            return renderBuiltinCall(c, "@clz", &.{payload});
-        },
-        .ctz => {
-            const payload = node.castTag(.ctz).?.data;
-            return renderBuiltinCall(c, "@ctz", &.{payload});
-        },
         .ceil => {
             const payload = node.castTag(.ceil).?.data;
             return renderBuiltinCall(c, "@ceil", &.{payload});
@@ -2487,8 +2473,6 @@ fn renderNodeGrouped(c: *Context, node: Node) !NodeIndex {
         .helper_call,
         .helper_ref,
         .byte_swap,
-        .clz,
-        .ctz,
         .ceil,
         .cos,
         .sin,

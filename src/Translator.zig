@@ -3386,15 +3386,6 @@ fn transBuiltinCall(
             ptr.* = .{ .base = .{ .tag = tag }, .data = coerced };
             return t.maybeSuppressResult(used, ZigNode.initPayload(&ptr.base));
         },
-        .clz, .ctz => if (call.args.len == 1) { // elementwise ctz/clz with second argument requires special handling
-            const arg = try t.transExprCoercing(scope, call.args[0], .used);
-            const arg_ty = try t.transType(scope, call.args[0].qt(t.tree), call.args[0].tok(t.tree));
-            const coerced = try ZigTag.as.create(t.arena, .{ .lhs = arg_ty, .rhs = arg });
-
-            const ptr = try t.arena.create(ast.Payload.UnOp);
-            ptr.* = .{ .base = .{ .tag = tag }, .data = coerced };
-            return t.maybeSuppressResult(used, ZigNode.initPayload(&ptr.base));
-        },
         .@"unreachable" => return ZigTag.@"unreachable".init(),
         else => unreachable,
     };
