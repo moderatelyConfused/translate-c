@@ -900,10 +900,10 @@ fn transVarDecl(t: *Translator, scope: *Scope, variable: Node.Variable, decl_nod
     };
 
     if (t.typeWasDemotedToOpaque(variable.qt)) {
-        if (variable.storage_class != .@"extern" and scope.id == .root) {
-            return t.failDecl(scope, variable.name_tok, name, "non-extern variable has opaque type", .{});
-        } else {
-            return t.failDecl(scope, variable.name_tok, name, "local variable has opaque type", .{});
+        switch (scope.id) {
+            .root => if (variable.storage_class != .@"extern")
+                return t.failDecl(scope, variable.name_tok, name, "non-extern variable has opaque type", .{}),
+            else => return t.failDecl(scope, variable.name_tok, name, "local variable has opaque type", .{}),
         }
     }
 
@@ -3947,6 +3947,11 @@ fn transTypeInfo(
             }
             break :operand try ZigTag.typeof.create(t.arena, operand);
         }
+
+        if (op == .sizeof and t.typeWasDemotedToOpaque(typeinfo.operand_qt)) {
+            return error.UnsupportedType; // Can't get sizeof on opaque type
+        }
+
         break :operand try t.transType(scope, typeinfo.operand_qt, typeinfo.op_tok);
     };
 
