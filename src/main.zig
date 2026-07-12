@@ -409,11 +409,9 @@ fn translate(
     }
 
     for (system_libs.items) |*system_lib| {
-        if (system_lib.pkg_conf) |parsed| {
-            try aro_args.ensureUnusedCapacity(arena, parsed.cflags.len + 1);
-            aro_args.appendSliceAssumeCapacity(parsed.cflags);
-            if (parsed.pthread)
-                aro_args.appendAssumeCapacity("-pthread");
+        if (system_lib.flags) |flags| {
+            try aro_args.ensureUnusedCapacity(arena, flags.len + 1);
+            aro_args.appendSliceAssumeCapacity(flags);
         }
     }
 
@@ -582,7 +580,7 @@ comptime {
 const SystemLib = struct {
     name: []const u8,
     options: std.Build.Module.LinkSystemLibraryOptions,
-    pkg_conf: ?PkgConfig.Parsed = null,
+    flags: ?[]const []const u8 = null,
 };
 
 fn runPkgConfig(
@@ -607,7 +605,7 @@ fn runPkgConfig(
     const pkg = pc.all[found_index];
 
     const result = process.run(arena, io, .{
-        .argv = &.{ pkg_config_exe, pkg.name, "--cflags-only-I", "--libs" },
+        .argv = &.{ pkg_config_exe, pkg.name, "--cflags", "--libs" },
         .environ_map = environ_map,
     }) catch |err| {
         if (force) fatal("failed running {s}: {t}", .{ pkg_config_exe, err });
@@ -626,31 +624,19 @@ fn runPkgConfig(
         return;
     }
 
-    const parsed = PkgConfig.parse(arena, result.stdout) catch |err| switch (err) {
-        error.InvalidPkgConfigOutput => {
-            if (force) return fatal("{s} package {s} invalid output: {s}", .{
-                pkg_config_exe, pkg.name, result.stdout,
-            });
-            return;
-        },
+    system_lib.flags = ret: {
+        var parsed: std.ArrayList([]const u8) = .empty;
+        var arg_it = mem.tokenizeAny(u8, result.stdout, " \r\n\t");
+
+        while (arg_it.next()) |arg| {
+            parsed.append(arena, arg) catch |err| break :ret err;
+        }
+
+        parsed.shrinkToLen(arena) catch |err| break :ret err;
+        break :ret parsed.toOwnedSliceAssert();
+    } catch |err| switch (err) {
         error.OutOfMemory => fatal("out of memory parsing pkg-config output", .{}),
     };
-    if (parsed.unknown_flags.len != 0) {
-        if (force) {
-            for (parsed.unknown_flags) |unknown_flag| {
-                std.log.err("{s} package {s} unknown flag: {s}", .{ pkg_config_exe, pkg.name, unknown_flag });
-            }
-            fatal("pkg-config output contained unknown flags", .{});
-        } else {
-            for (parsed.unknown_flags) |unknown_flag| {
-                std.log.warn("{s} package {s} unknown flag: {s}", .{ pkg_config_exe, pkg.name, unknown_flag });
-            }
-            std.log.warn("skipping pkg-config for package {s} due to unknown flags", .{pkg.name});
-            return;
-        }
-    }
-
-    system_lib.pkg_conf = parsed;
 }
 
 const ChildTermFormatter = struct {
