@@ -1287,8 +1287,24 @@ fn parseCPostfixExprInner(mt: *MacroTranslator, scope: *Scope, type_name: ?ZigNo
                     var args: std.ArrayList(ZigNode) = .empty;
                     defer args.deinit(gpa);
 
-                    while (true) {
-                        const arg = try mt.parseCCondExpr(scope);
+                    const func_params = if (mt.t.getFnProto(node)) |func| func.data.params else &.{};
+                    var arg_idx: usize = 0;
+                    while (true) : (arg_idx += 1) {
+                        var arg = try mt.parseCCondExpr(scope);
+                        if (arg_idx < func_params.len) {
+                            if (func_params[arg_idx].type.castTag(.type)) |t| {
+                                if (std.mem.eql(u8, t.data, "bool")) {
+                                    // If a C bool function parameter has been
+                                    // actually lowered to the Zig bool type,
+                                    // we need to cast; likely the parameter in
+                                    // the call is still int and will not
+                                    // coerce.
+                                    const bool_ty = try ZigTag.type.create(mt.t.arena, "bool");
+                                    arg = try mt.t.createHelperCallNode(.cast, &.{ bool_ty, arg });
+                                }
+                            }
+                        }
+
                         try args.append(gpa, arg);
 
                         const next_id = mt.peek();

@@ -4464,8 +4464,16 @@ pub fn getFnProto(t: *Translator, ref: ZigNode) ?*ast.Payload.Func {
         v.data.init orelse return null
     else if (ref.castTag(.var_simple) orelse ref.castTag(.pub_var_simple)) |v|
         v.data.init
-    else
-        return null;
+    else if (ref.castTag(.identifier)) |v| ident: {
+        // Idents may reference functions directly, if this is the case just
+        // return that here (no need to check containers).
+        if (t.global_scope.sym_table.get(v.data)) |w| {
+            if (w.castTag(.func)) |fn_proto| {
+                return fn_proto;
+            }
+        }
+        break :ident ref;
+    } else return null;
     if (t.getContainerTypeOf(init)) |ty_node| {
         if (ty_node.castTag(.optional_type)) |prefix| {
             if (prefix.data.castTag(.single_pointer)) |sp| {
