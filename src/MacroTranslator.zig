@@ -270,7 +270,7 @@ fn parseCNumLit(mt: *MacroTranslator) ParseError!ZigNode {
     var bytes = try std.ArrayList(u8).initCapacity(arena, lit_bytes.len + 3 + 2);
 
     const allow_msvc_suffixes = mt.t.comp.langopts.allowFixedSizedIntSuffixes();
-    const prefix = aro.Tree.Token.NumberPrefix.fromString(lit_bytes, allow_msvc_suffixes);
+    const prefix = aro.Tokenizer.number_literal.Prefix.fromString(lit_bytes, allow_msvc_suffixes);
     switch (prefix) {
         .binary => bytes.appendSliceAssumeCapacity("0b"),
         .octal => bytes.appendSliceAssumeCapacity("0o"),
@@ -336,7 +336,7 @@ fn parseCNumLit(mt: *MacroTranslator) ParseError!ZigNode {
     };
 
     const is_float = after_int.len != suffix_str.len;
-    const suffix = aro.Tree.Token.NumberSuffix.fromString(suffix_str, if (is_float) .float else .int, allow_msvc_suffixes) orelse {
+    const suffix = aro.Tokenizer.number_literal.Suffix.fromString(suffix_str, if (is_float) .float else .int, allow_msvc_suffixes) orelse {
         try mt.fail("invalid number suffix: '{s}'", .{suffix_str});
         return error.ParseError;
     };
@@ -1330,6 +1330,11 @@ fn parseCPostfixExprInner(mt: *MacroTranslator, scope: *Scope, type_name: ?ZigNo
                         switch (next_id) {
                             .comma => {
                                 mt.i += 1;
+                                // Check for trailing comma
+                                if (mt.peek() == .r_brace) {
+                                    mt.i += 1;
+                                    break;
+                                }
                             },
                             .r_brace => {
                                 mt.i += 1;
@@ -1357,6 +1362,11 @@ fn parseCPostfixExprInner(mt: *MacroTranslator, scope: *Scope, type_name: ?ZigNo
                     switch (next_id) {
                         .comma => {
                             mt.i += 1;
+                            // Check for trailing comma
+                            if (mt.peek() == .r_brace) {
+                                mt.i += 1;
+                                break;
+                            }
                         },
                         .r_brace => {
                             mt.i += 1;

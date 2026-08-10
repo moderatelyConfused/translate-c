@@ -579,7 +579,7 @@ pub const Payload = struct {
             is_extern: bool,
             is_export: bool,
             is_threadlocal: bool,
-            alignment: ?c_uint,
+            alignment: ?u32,
             linksection_string: ?[]const u8,
             name: []const u8,
             type: Node,
@@ -601,7 +601,7 @@ pub const Payload = struct {
             params: []Param,
             return_type: Node,
             body: ?Node,
-            alignment: ?c_uint,
+            alignment: ?u32,
         },
 
         pub const CallingConvention = enum {
@@ -642,7 +642,7 @@ pub const Payload = struct {
         pub const Field = struct {
             name: []const u8,
             type: Node,
-            alignment: ?usize,
+            alignment: ?u32,
             default_value: ?Node,
         };
     };

@@ -8,7 +8,6 @@ pub fn build(b: *std.Build) void {
     const test_cross_targets = b.option(bool, "test-cross-targets", "Include cross-translation targets in the test cases") orelse false;
     const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
     const use_llvm = b.option(bool, "llvm", "Use LLVM backend to generate aro executable");
-    const link_libc = b.option(bool, "link-libc", "Link libc") orelse (optimize != .Debug);
     const debug_allocations = b.option(bool, "debug-allocations", "Collect detailed debug info for all allocations (slow)") orelse false;
 
     const options = b.addOptions();
@@ -47,9 +46,6 @@ pub fn build(b: *std.Build) void {
         .use_llvm = use_llvm,
         .use_lld = use_llvm,
     });
-    if (link_libc) {
-        translate_c_exe.root_module.link_libc = true;
-    }
 
     b.installDirectory(.{
         .source_dir = aro.path("include"),

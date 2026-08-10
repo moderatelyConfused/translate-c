@@ -426,7 +426,7 @@ fn translate(
             return d.fatal("user provided macro source exceeded max size", .{});
         }
 
-        const content = try macro_buf.toOwnedSlice(gpa);
+        const content = try macro_buf.toOwnedSliceSentinel(gpa, 0);
         errdefer gpa.free(content);
 
         break :macros try d.comp.addSourceFromOwnedBuffer("<command line>", content, .user);

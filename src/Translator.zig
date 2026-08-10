@@ -768,53 +768,37 @@ fn transFnDecl(t: *Translator, scope: *Scope, function: Node.Function, decl_node
         try t.warn(scope, function.name_tok, "TODO unable to translate variadic function, demoted to extern", .{});
     }
 
+    // TODO actually set with @export/@extern
+    const linkage = t.tree.linkage(decl_node);
+    if (linkage != .strong) {
+        try t.warn(scope, fn_decl_loc, "TODO {s} linkage ignored", .{@tagName(linkage)});
+    }
+
     const is_always_inline = has_body and t.tree.attr_map.getAttribute(decl_node, .always_inline) != null;
     const proto_ctx: FnProtoContext = .{
         .fn_name = fn_name,
         .is_always_inline = is_always_inline,
         .is_extern = !has_body,
-        .is_export = !function.static and has_body and !is_always_inline and !function.@"inline",
+        .is_export = !function.static and has_body and !is_always_inline and !function.@"inline" and linkage == .strong,
         .is_pub = scope.id == .root and (!function.static or t.pub_static),
         .has_body = has_body,
-        .cc = switch (func_ty.cc) {
-            .default => .c,
-            .cdecl => .c,
-            .stdcall => .x86_stdcall,
-            .thiscall => .x86_thiscall,
-            .fastcall => .x86_fastcall,
-            .regcall => .x86_regcall,
-            .riscv_vector_cc => switch (t.comp.target.cpu.arch) {
-                .riscv32, .riscv32be => .riscv32_ilp32_v,
-                .riscv64, .riscv64be => .riscv64_lp64_v,
-                else => unreachable,
-            },
-            .riscv_vls_cc => return t.failDecl(scope, fn_decl_loc, fn_name, "TODO riscv_vls_cc", .{}),
-            .aarch64_sve_pcs => .aarch64_sve_pcs,
-            .aarch64_vector_pcs => .aarch64_vfabi,
-            .arm_aapcs => .arm_aapcs,
-            .arm_aapcs_vfp => .arm_aapcs_vfp,
-            .vectorcall => switch (t.comp.target.cpu.arch) {
-                .x86 => .x86_vectorcall,
-                .x86_64 => .x86_64_vectorcall,
-                .aarch64, .aarch64_be => .aarch64_vfabi,
-                else => .c,
-            },
-            .ms_abi => switch (t.comp.target.cpu.arch) {
-                .x86_64 => .x86_64_win,
-                .aarch64, .aarch64_be => .aarch64_aapcs_win,
-                else => .c,
-            },
-            .sysv_abi => .x86_64_sysv,
-        },
-        .decl_node = .pack(decl_node),
+        .cc = if (is_always_inline) .c else t.transCallingConvention(func_ty.cc) catch
+            return t.failDecl(scope, fn_decl_loc, fn_name, "TODO {s}", .{@tagName(func_ty.cc)}),
+        .linksection_string = if (t.tree.attr_map.getAttribute(decl_node, .section)) |attr| attr.args.section else null,
+        .alignment = t.tree.attr_map.requestedAlignment(decl_node, t.comp) orelse null,
+        .noreturn = t.tree.attr_map.hasAttribute(decl_node, .noreturn),
     };
 
-    const proto_node = t.transFnType(&t.global_scope.base, function.qt, func_ty, fn_decl_loc, proto_ctx) catch |err| switch (err) {
+    const proto_node = t.transFnType(&t.global_scope.base, func_ty, fn_decl_loc, proto_ctx) catch |err| switch (err) {
         error.UnsupportedType => {
             return t.failDecl(scope, fn_decl_loc, fn_name, "unable to resolve prototype of function", .{});
         },
         error.OutOfMemory => |e| return e,
     };
+
+    if (is_always_inline and func_ty.cc != .default) {
+        try t.warn(&t.global_scope.base, fn_decl_loc, "{s} calling convention ignored on inline function", .{@tagName(func_ty.cc)});
+    }
 
     const proto_payload = proto_node.castTag(.func).?;
     if (!has_body) {
@@ -836,7 +820,7 @@ fn transFnDecl(t: *Translator, scope: *Scope, function: Node.Function, decl_node
     block_scope.return_type = func_ty.return_type;
     defer block_scope.deinit();
 
-    var param_id: c_uint = 0;
+    var param_id: u32 = 0;
     for (proto_payload.data.params, func_ty.params) |*param, param_info| {
         const param_name = param.name orelse {
             proto_payload.data.is_extern = true;
@@ -973,12 +957,11 @@ fn transVarDecl(t: *Translator, scope: *Scope, variable: Node.Variable, decl_nod
     const linksection_string = if (t.tree.attr_map.getAttribute(decl_node, .section)) |attr| attr.args.section else null;
 
     // TODO actually set with @export/@extern
-    const linkage = .strong; // variable.qt.linkage(t.comp);
+    const linkage = t.tree.linkage(decl_node);
     if (linkage != .strong) {
         try t.warn(scope, variable.name_tok, "TODO {s} linkage ignored", .{@tagName(linkage)});
     }
 
-    const alignment: ?c_uint = t.tree.attr_map.requestedAlignment(decl_node, t.comp) orelse null;
     var node = try ZigTag.var_decl.create(t.arena, .{
         .is_pub = toplevel,
         .is_const = is_const and !self_referential,
@@ -986,7 +969,7 @@ fn transVarDecl(t: *Translator, scope: *Scope, variable: Node.Variable, decl_nod
         .is_export = toplevel and variable.storage_class == .auto and linkage == .strong,
         .is_threadlocal = variable.thread_local,
         .linksection_string = linksection_string,
-        .alignment = alignment,
+        .alignment = t.tree.attr_map.requestedAlignment(decl_node, t.comp) orelse null,
         .name = if (use_base_name) base_name else name,
         .type = type_node,
         .init = init_node,
@@ -1124,7 +1107,7 @@ fn transStaticAssert(t: *Translator, scope: *Scope, static_assert: Node.StaticAs
     const condition = t.transExpr(scope, static_assert.cond, .used) catch |err| switch (err) {
         error.SelfReferential => unreachable,
         error.UnsupportedTranslation, error.UnsupportedType => {
-            return try t.warn(&t.global_scope.base, static_assert.cond.tok(t.tree), "unable to translate _Static_assert condition", .{});
+            return try t.warn(&t.global_scope.base, static_assert.firstCondToken(), "unable to translate _Static_assert condition", .{});
         },
         error.OutOfMemory => |e| return e,
     };
@@ -1139,10 +1122,9 @@ fn transStaticAssert(t: *Translator, scope: *Scope, static_assert: Node.StaticAs
         var allocating: std.Io.Writer.Allocating = .init(t.gpa);
         defer allocating.deinit();
 
-        allocating.writer.writeAll("\"static assertion failed \\") catch return error.OutOfMemory;
+        allocating.writer.writeAll("\"static assertion failed \\\"") catch return error.OutOfMemory;
 
-        aro.Value.printString(bytes, str_qt, t.comp, &allocating.writer) catch return error.OutOfMemory;
-        allocating.writer.end -= 1; // printString adds a terminating " so we need to remove it
+        aro.Value.printString(bytes, str_qt, t.comp, &allocating.writer, .bare) catch return error.OutOfMemory;
         allocating.writer.writeAll("\\\"\"") catch return error.OutOfMemory;
 
         break :str try ZigTag.string_literal.create(t.arena, try t.arena.dupe(u8, allocating.written()));
@@ -1158,7 +1140,7 @@ fn transGlobalAsm(t: *Translator, scope: *Scope, global_asm: Node.GlobalAsm) Err
 
     var allocating: std.Io.Writer.Allocating = try .initCapacity(t.gpa, bytes.len);
     defer allocating.deinit();
-    aro.Value.printString(bytes, global_asm.asm_str.qt(t.tree), t.comp, &allocating.writer) catch return error.OutOfMemory;
+    aro.Value.printString(bytes, global_asm.asm_str.qt(t.tree), t.comp, &allocating.writer, .quoted) catch return error.OutOfMemory;
 
     const str_node = try ZigTag.string_literal.create(t.arena, try t.arena.dupe(u8, allocating.written()));
 
@@ -1260,7 +1242,11 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
                 .variable => return t.fail(error.UnsupportedType, source_loc, "VLA unsupported '{s}'", .{try t.getTypeStr(qt)}),
             }
         },
-        .func => |func_ty| return t.transFnType(scope, qt, func_ty, source_loc, .{}),
+        .func => |func_ty| {
+            return t.transFnType(scope, func_ty, source_loc, .{
+                .cc = t.transCallingConvention(func_ty.cc) catch return t.fail(error.UnsupportedType, source_loc, "TODO {s}", .{@tagName(func_ty.cc)}),
+            });
+        },
         .@"struct", .@"union" => |record_ty| {
             var trans_scope = scope;
             if (!record_ty.isAnonymous(t.comp)) {
@@ -1317,7 +1303,7 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
 /// the fields with 0 offset need an `align` qualifier. Strictly speaking, we could just
 /// pedantically assign those fields the same alignment as the parent's pointer alignment,
 /// but this helps the generated code to be a little less verbose.
-fn headFieldAlignment(t: *Translator, record_decl: aro.Type.Record) ?usize {
+fn headFieldAlignment(t: *Translator, record_decl: aro.Type.Record) ?u32 {
     const bits_per_byte = 8;
     const parent_ptr_alignment_bits = record_decl.layout.?.pointer_alignment_bits;
     const parent_ptr_alignment = parent_ptr_alignment_bits / bits_per_byte;
@@ -1337,7 +1323,7 @@ fn headFieldAlignment(t: *Translator, record_decl: aro.Type.Record) ?usize {
 /// if we only look at the user-requested alignment.
 ///
 /// A null value indicates that a field is 'naturally aligned'.
-fn alignmentForField(t: *Translator, record_decl: aro.Type.Record, head_field_alignment: ?usize, field_index: usize) ?usize {
+fn alignmentForField(t: *Translator, record_decl: aro.Type.Record, head_field_alignment: ?u32, field_index: usize) ?u32 {
     const fields = record_decl.fields;
     assert(fields.len != 0);
     const field = fields[field_index];
@@ -1375,7 +1361,7 @@ fn alignmentForField(t: *Translator, record_decl: aro.Type.Record, head_field_al
         const rem_alignment = rem_bits / bits_per_byte;
         if (rem_alignment > 0 and std.math.isPowerOfTwo(rem_alignment)) {
             const actual_alignment = @min(rem_alignment, parent_ptr_alignment);
-            return @as(c_uint, @truncate(actual_alignment));
+            return @truncate(actual_alignment);
         } else {
             return 1;
         }
@@ -1418,6 +1404,38 @@ fn alignmentForField(t: *Translator, record_decl: aro.Type.Record, head_field_al
     }
 }
 
+fn transCallingConvention(t: *Translator, cc: aro.Type.Func.CallingConvention) !ast.Payload.Func.CallingConvention {
+    return switch (cc) {
+        .default, .cdecl => .c,
+        .stdcall => .x86_stdcall,
+        .thiscall => .x86_thiscall,
+        .fastcall => .x86_fastcall,
+        .regcall => .x86_regcall,
+        .riscv_vector_cc => switch (t.comp.target.cpu.arch) {
+            .riscv32, .riscv32be => .riscv32_ilp32_v,
+            .riscv64, .riscv64be => .riscv64_lp64_v,
+            else => unreachable,
+        },
+        .riscv_vls_cc => return error.UnsupportedCallingConvention,
+        .aarch64_sve_pcs => .aarch64_sve_pcs,
+        .aarch64_vector_pcs => .aarch64_vfabi,
+        .arm_aapcs => .arm_aapcs,
+        .arm_aapcs_vfp => .arm_aapcs_vfp,
+        .vectorcall => switch (t.comp.target.cpu.arch) {
+            .x86 => .x86_vectorcall,
+            .x86_64 => .x86_64_vectorcall,
+            .aarch64, .aarch64_be => .aarch64_vfabi,
+            else => .c,
+        },
+        .ms_abi => switch (t.comp.target.cpu.arch) {
+            .x86_64 => .x86_64_win,
+            .aarch64, .aarch64_be => .aarch64_aapcs_win,
+            else => .c,
+        },
+        .sysv_abi => .x86_64_sysv,
+    };
+}
+
 const FnProtoContext = struct {
     is_pub: bool = false,
     is_export: bool = false,
@@ -1426,18 +1444,18 @@ const FnProtoContext = struct {
     fn_name: ?[]const u8 = null,
     has_body: bool = false,
     cc: ast.Payload.Func.CallingConvention = .c,
-    decl_node: Node.OptIndex = .null,
+    alignment: ?u32 = null,
+    noreturn: bool = false,
+    linksection_string: ?[]const u8 = null,
 };
 
 fn transFnType(
     t: *Translator,
     scope: *Scope,
-    func_qt: QualType,
     func_ty: aro.Type.Func,
     source_loc: TokenIndex,
     ctx: FnProtoContext,
 ) !ZigNode {
-    _ = func_qt; // autofix
     const param_count: usize = func_ty.params.len;
     const fn_params = try t.arena.alloc(ast.Payload.Param, param_count);
 
@@ -1458,14 +1476,10 @@ fn transFnType(
         };
     }
 
-    const linksection_string = if (t.tree.attr_map.getAttribute(ctx.decl_node, .section)) |attr| attr.args.section else null;
-
-    const alignment: ?c_uint = t.tree.attr_map.requestedAlignment(ctx.decl_node, t.comp) orelse null;
-
     const explicit_callconv = if ((ctx.is_always_inline or ctx.is_export or ctx.is_extern) and ctx.cc == .c) null else ctx.cc;
 
     const return_type_node = blk: {
-        if (t.tree.attr_map.getAttribute(ctx.decl_node, .noreturn) != null) {
+        if (ctx.noreturn) {
             break :blk ZigTag.noreturn_type.init();
         } else {
             const return_qt = func_ty.return_type;
@@ -1484,19 +1498,13 @@ fn transFnType(
         }
     };
 
-    // TODO actually set with @export/@extern
-    const linkage = .strong; //func_qt.linkage(t.comp);
-    if (linkage != .strong) {
-        try t.warn(scope, source_loc, "TODO {s} linkage ignored", .{@tagName(linkage)});
-    }
-
     const payload = try t.arena.create(ast.Payload.Func);
     payload.* = .{
         .base = .{ .tag = .func },
         .data = .{
             .is_pub = ctx.is_pub,
             .is_extern = ctx.is_extern,
-            .is_export = ctx.is_export and linkage == .strong,
+            .is_export = ctx.is_export,
             .is_inline = ctx.is_always_inline,
             .is_var_args = switch (func_ty.kind) {
                 .normal => false,
@@ -1507,12 +1515,12 @@ fn transFnType(
                     !ctx.is_export and !ctx.is_always_inline and !ctx.has_body,
             },
             .name = ctx.fn_name,
-            .linksection_string = linksection_string,
+            .linksection_string = ctx.linksection_string,
             .explicit_callconv = explicit_callconv,
             .params = fn_params,
             .return_type = return_type_node,
             .body = null,
-            .alignment = alignment,
+            .alignment = ctx.alignment,
         },
     };
     return ZigNode.initPayload(&payload.base);
@@ -1690,6 +1698,12 @@ fn transStmt(t: *Translator, scope: *Scope, stmt: Node.Index) TransError!ZigNode
         .codegen_diagnostic => {
             // Could be translated as `if (true) @compileError(...)`, ignore for now.
             return t.fail(error.UnsupportedTranslation, stmt.tok(t.tree), "TODO codegen diagnostic", .{});
+        },
+        .decl_stmt => |decl_stmt| {
+            for (decl_stmt.decls) |decl| {
+                _ = try t.transStmt(scope, decl);
+            }
+            return ZigTag.declaration.init();
         },
         else => return t.transExprCoercing(scope, stmt, .unused),
     }
@@ -1879,21 +1893,13 @@ fn transForStmt(t: *Translator, scope: *Scope, for_stmt: Node.ForStmt) TransErro
     var block_scope: ?Scope.Block = null;
     defer if (block_scope) |*bs| bs.deinit();
 
-    switch (for_stmt.init) {
-        .decls => |decls| {
-            block_scope = try Scope.Block.init(t, scope, false);
-            loop_scope.parent = &block_scope.?.base;
-            for (decls) |decl| {
-                try t.transDecl(&block_scope.?.base, decl);
-            }
-        },
-        .expr => |maybe_init| if (maybe_init) |init| {
-            block_scope = try Scope.Block.init(t, scope, false);
-            loop_scope.parent = &block_scope.?.base;
-            const init_node = try t.transStmt(&block_scope.?.base, init);
-            try loop_scope.appendNode(init_node);
-        },
+    if (for_stmt.init) |init| {
+        block_scope = try Scope.Block.init(t, scope, false);
+        loop_scope.parent = &block_scope.?.base;
+        const init_node = try t.transStmt(&block_scope.?.base, init);
+        if (init_node.tag() != .declaration) try loop_scope.appendNode(init_node);
     }
+
     var cond_scope: Scope.Condition = .{
         .base = .{
             .parent = &loop_scope,
@@ -2352,6 +2358,7 @@ fn transExpr(t: *Translator, scope: *Scope, expr: Node.Index, used: ResultUsed) 
         .goto_stmt,
         .computed_goto_stmt,
         .asm_stmt,
+        .decl_stmt,
         .global_asm,
         .typedef,
         .struct_decl,
@@ -3650,7 +3657,7 @@ fn transNarrowStringLiteral(
     var allocating: std.Io.Writer.Allocating = try .initCapacity(t.gpa, bytes.len);
     defer allocating.deinit();
 
-    aro.Value.printString(bytes, literal.qt, t.comp, &allocating.writer) catch return error.OutOfMemory;
+    aro.Value.printString(bytes, literal.qt, t.comp, &allocating.writer, .quoted) catch return error.OutOfMemory;
 
     return ZigTag.string_literal.create(t.arena, try t.arena.dupe(u8, allocating.written()));
 }

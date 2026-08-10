@@ -18,9 +18,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
-
 jobs:
   build:
     timeout-minutes: 120
@@ -77,5 +74,6 @@ jobs:
       # - name: Run Cross-Translation Tests
       #   run: zig build test --maxrss ${{ env.ZSF_MAX_RSS }} -Doptimize=Debug -Dtest-cross-targets
 
-      - name: Run Examples
-        run: zig build all --maxrss ${{ env.ZSF_MAX_RSS }} --build-file examples/build.zig
+      # --build-file is broken in the CI
+      # - name: Run Examples
+      #   run: zig build all --maxrss ${{ env.ZSF_MAX_RSS }} --build-file examples/build.zig

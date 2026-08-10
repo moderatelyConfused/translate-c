@@ -6,6 +6,7 @@ typedef struct Color {
 } Color;
 #define CLITERAL(type)      (type)
 #define LIGHTGRAY  CLITERAL(Color){ 200, 200, 200, 255 }   // Light Gray
+#define DARKGRAY   CLITERAL(Color){ 100, 100, 100, 255, }  // Dark Gray
 typedef struct boom_t
 {
     int i1;
@@ -13,7 +14,9 @@ typedef struct boom_t
 #define FOO ((boom_t){1})
 typedef struct { float x; } MyCStruct;
 #define A(_x)   (MyCStruct) { .x = (_x) }
-#define B A(0.f)
+#define A2(_x)  (MyCStruct) { .x = (_x), }
+#define B  A(0.f)
+#define B2 A2(0.f)
 
 // translate
 // args = -fdefault-init
@@ -32,6 +35,7 @@ typedef struct { float x; } MyCStruct;
 // }
 //
 // pub const LIGHTGRAY = @import("std").mem.zeroInit(CLITERAL(Color), .{ @as(c_int, 200), @as(c_int, 200), @as(c_int, 200), @as(c_int, 255) });
+// pub const DARKGRAY = @import("std").mem.zeroInit(CLITERAL(Color), .{ @as(c_int, 100), @as(c_int, 100), @as(c_int, 100), @as(c_int, 255) });
 //
 // pub const struct_boom_t = extern struct {
 //     i1: c_int = 0,
@@ -51,4 +55,12 @@ typedef struct { float x; } MyCStruct;
 //     });
 // }
 //
+// pub inline fn A2(_x: anytype) MyCStruct {
+//     _ = &_x;
+//     return @import("std").mem.zeroInit(MyCStruct, .{
+//         .x = _x,
+//     });
+// }
+//
 // pub const B = A(@as(f32, 0.0));
+// pub const B2 = A2(@as(f32, 0.0));
