@@ -36,27 +36,27 @@ void switch_fn(int i) {
 //     _ = &i;
 //     var res: c_int = 0;
 //     _ = &res;
-//     while (true) {
+//     blk: {
 //         switch (i) {
 //             @as(c_int, 0) => {
 //                 res = 1;
 //                 res = 2;
 //                 res = @as(c_int, 3) * i;
-//                 break;
+//                 break :blk;
 //             },
 //             @as(c_int, 1)...@as(c_int, 3) => {
 //                 res = 2;
 //                 res = @as(c_int, 3) * i;
-//                 break;
+//                 break :blk;
 //             },
 //             else => {
 //                 res = @as(c_int, 3) * i;
-//                 break;
+//                 break :blk;
 //             },
 //             @as(c_int, 7) => {
 //                 {
 //                     res = 7;
-//                     break;
+//                     break :blk;
 //                 }
 //             },
 //             @as(c_int, 4), @as(c_int, 5) => {
@@ -67,19 +67,17 @@ void switch_fn(int i) {
 //                 }
 //             },
 //             @as(c_int, 6) => {
-//                 while (true) {
+//                 blk_1: {
 //                     switch (res) {
 //                         @as(c_int, 9) => {
-//                             break;
+//                             break :blk_1;
 //                         },
 //                         else => {},
 //                     }
-//                     break;
 //                 }
 //                 res = 1;
 //                 return;
 //             },
 //         }
-//         break;
 //     }
 // }

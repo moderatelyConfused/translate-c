@@ -30,7 +30,7 @@ int entry(int i) {
 //     var res: c_int = i;
 //     _ = &res;
 //     while (true) {
-//         while (true) {
+//         blk: {
 //             switch (res) {
 //                 @as(c_int, 0) => {
 //                     res += 1;
@@ -54,13 +54,12 @@ int entry(int i) {
 //                 },
 //                 @as(c_int, 5) => {
 //                     res = 10;
-//                     break;
+//                     break :blk;
 //                 },
 //                 else => {
-//                     break;
+//                     break :blk;
 //                 },
 //             }
-//             break;
 //         }
 //     }
 //     return res;
