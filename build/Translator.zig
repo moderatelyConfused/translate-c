@@ -92,6 +92,15 @@ pub const Options = struct {
     /// instead of one huge file. The module is the same either way, but
     /// editors and ZLS stay responsive on large frameworks such as Cocoa.
     objc_split: bool = true,
+    /// File name of the generated root file. Defaults to `<name>.zig`, or to
+    /// `cimport.zig` with `objc`: ZLS treats a file of that name like the
+    /// output of `@cImport`, which is what it is. It then does not try to
+    /// infer the types of `anytype` parameters (translated function-like
+    /// macros) from call sites while listing the members of the module,
+    /// which walks the whole file per parameter and makes completion on
+    /// `c.` take many seconds for Cocoa, and it hides `_`-prefixed names from
+    /// that list.
+    root_file_name: ?[]const u8 = null,
 };
 
 pub fn init(translate_c_dep: *Build.Dependency, options: Options) Translator {
@@ -119,7 +128,9 @@ pub fn initInner(
     const run = b.addRunArtifact(tc_conf.exe);
     run.setName(b.fmt("translate-c {s}", .{name}));
 
-    const output_file = run.addPrefixedOutputFileArg("-o=", b.fmt("{s}.zig", .{name}));
+    const root_file_name = options.root_file_name orelse
+        if (options.objc) "cimport.zig" else b.fmt("{s}.zig", .{name});
+    const output_file = run.addPrefixedOutputFileArg("-o=", root_file_name);
 
     const mod = b.createModule(.{
         .root_source_file = output_file,

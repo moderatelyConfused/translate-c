@@ -94,6 +94,15 @@ whole, for example after "go to definition" opens it. With one file per class,
 omitting `-fobjc-dir=<dir>` on the command line, where `<dir>` must be inside
 the output file's directory) puts everything into the root file instead.
 
+For the same reason the build helper names the root file `cimport.zig` when
+`objc` is set (`root_file_name` overrides this). ZLS treats a file of that name
+like `@cImport` output: when listing the members of the module (completion on
+`c.`) it does not infer the types of `anytype` parameters of translated macros
+from call sites, which otherwise walks the whole root file once per parameter
+and takes several seconds for Cocoa, and it hides `_`-prefixed names from that
+list. Even so, a module the size of Cocoa has close to 50k members and every
+completion on `c.` enumerates all of them; expect about a second.
+
 ### What the bindings look like
 
 Every class and protocol becomes an `opaque` wrapper type. Objects are plain
