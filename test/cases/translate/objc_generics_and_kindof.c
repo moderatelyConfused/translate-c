@@ -34,6 +34,12 @@ typedef unsigned long NSUInteger;
 @property (readonly, copy) UnitType unit;
 @end
 
+@interface NSDiffableDataSource<SectionIdentifierType, ItemIdentifierType> : NSObject
+typedef NSView * _Nullable (^NSDiffableItemProvider)(NSView * _Nonnull, ItemIdentifierType _Nonnull);
+typedef ItemIdentifierType NSDiffableItem;
+- (instancetype)initWithItemProvider:(NSDiffableItemProvider)itemProvider;
+@end
+
 extern NSArray<NSString *> *global_strings;
 
 // translate
@@ -64,6 +70,11 @@ extern NSArray<NSString *> *global_strings;
 //         pub fn setObject_forKey(self: *Self, anObject: ?objc.Object, aKey: ?*NSCopying) void {
 //
 //         pub fn unit(self: *Self) ?*NSView {
+//
+// pub const NSDiffableItemProvider = __objc.Block(fn (*NSView, objc.c.id) callconv(.c) ?*NSView);
+// pub const NSDiffableItem = id;
+//
+//         pub fn initWithItemProvider(self: *Self, itemProvider: __objc.Block(fn (*NSView, objc.c.id) callconv(.c) ?*NSView)) ?*Self {
 //
 //         pub fn superview(self: *Self) ?*NSView {
 //

@@ -1,6 +1,7 @@
 #define NS_UNAVAILABLE __attribute__((unavailable))
 extern int index;
-@class NSError;
+@class NSError, CIImage;
+typedef struct _NSRange { unsigned long location; unsigned long length; } NSRange;
 
 @interface NSObject
 + (instancetype)alloc;
@@ -21,6 +22,8 @@ extern int index;
 - (int)foo;
 - (int)foo:(int)x;
 - (void)aloneOnIos __attribute__((availability(ios,unavailable)));
+- (CIImage *)CIImage;
+- (NSRange)NSRange;
 @end
 
 // translate
@@ -38,6 +41,8 @@ extern int index;
 //     pub const foo = __objc_methods_NSFoo(@This()).foo;
 //     pub const foo_ = __objc_methods_NSFoo(@This()).foo_;
 //     pub const aloneOnIos = __objc_methods_NSFoo(@This()).aloneOnIos;
+//     pub const CIImage_ = __objc_methods_NSFoo(@This()).CIImage_;
+//     pub const NSRange_ = __objc_methods_NSFoo(@This()).NSRange_;
 //
 //     // Methods of class `NSObject`
 //     pub const alloc = __objc_methods_NSObject(@This()).alloc;
@@ -61,6 +66,12 @@ extern int index;
 //
 //         /// Availability (ios): unavailable
 //         pub fn aloneOnIos(self: *Self) void {
+//
+//         pub fn CIImage_(self: *Self) ?*CIImage {
+//             return __objc.msgSend(self, ?*CIImage, "CIImage", .{});
+//
+//         pub fn NSRange_(self: *Self) NSRange {
+//             return __objc.msgSend(self, NSRange, "NSRange", .{});
 //
 //         pub fn class_class() ?objc.Class {
 //             return __objc.classFromRaw(__objc.msgSendClass(Self, objc.c.Class, "class", .{}));

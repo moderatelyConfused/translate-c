@@ -107,8 +107,9 @@ mutable.release();                                     // - (oneway void)release
   `initWithBytes:length:` becomes `initWithBytes_length`. Names that collide
   with a Zig keyword are quoted (`@"error"`); a class method whose name
   collides with an instance method gets a `_class` suffix (`description` and
-  `description_class`), and a selector with arguments that collides with one
-  without gets a trailing `_` (`foo` and `foo_`).
+  `description_class`), a selector with arguments that collides with one
+  without gets a trailing `_` (`foo` and `foo_`), and so does a method named
+  like a type (`- (CIImage *)CIImage` becomes `CIImage_`).
 - Inherited methods, category methods and the methods of adopted protocols are
   all available on the wrapper. Class methods are called on the wrapper type
   (`NSString.stringWithUTF8String(...)`), instance methods on the object.
@@ -156,8 +157,8 @@ resolved for the prototypes.
 The `test-objc` build step compile-checks the bindings generated from
 [`test/objc/Foundation.h`](test/objc/Foundation.h) together with a vendored copy
 of zig-objc for `aarch64-macos` and `x86_64-macos`; it runs on any host. The
-real `<Foundation/Foundation.h>` of the macOS 11.3 SDK translates without
-errors (about 145k lines of Zig, 4.7k methods), and a program using those
-bindings compiles against zig-objc; see
+real `<Foundation/Foundation.h>` and `<Cocoa/Cocoa.h>` of the macOS 11.3 SDK
+translate without errors (about 145k and 360k lines of Zig), and a program using
+those bindings compiles against zig-objc; see
 [`examples/objc_foundation`](examples/objc_foundation/build.zig) for a build
 script that does this with a local SDK.

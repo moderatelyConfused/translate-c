@@ -37,6 +37,10 @@ out: std.Io.Writer.Allocating,
 protos: std.StringHashMapUnmanaged(Node.Index) = .empty,
 /// Names that are taken at file scope in the generated file.
 reserved: std.StringHashMapUnmanaged(void) = .empty,
+/// Names of types at file scope (wrapper types, C typedefs and records) that
+/// method signatures may refer to. A method with such a name would make the
+/// type an ambiguous reference inside its mixin, so method names avoid them.
+type_names: std.StringHashMapUnmanaged(void) = .empty,
 /// Objective-C class name -> Zig wrapper name.
 class_names: std.StringHashMapUnmanaged([]const u8) = .empty,
 /// Objective-C protocol name -> Zig wrapper name.
@@ -119,6 +123,7 @@ fn deinit(cg: *Codegen) void {
     cg.reserved.deinit(cg.gpa);
     cg.class_names.deinit(cg.gpa);
     cg.protocol_names.deinit(cg.gpa);
+    cg.type_names.deinit(cg.gpa);
     cg.specs.deinit(cg.gpa);
 }
 
@@ -189,7 +194,11 @@ fn collectReserved(cg: *Codegen) Error!void {
     for (t.global_scope.sym_table.keys()) |name| try cg.reserved.put(cg.gpa, name, {});
     for ([_][]const u8{ "objc", "__objc", "__root", "__builtin", "__helpers", "std" }) |name| {
         try cg.reserved.put(cg.gpa, name, {});
+        try cg.type_names.put(cg.gpa, name, {});
     }
+    for (t.typedefs.keys()) |name| try cg.type_names.put(cg.gpa, name, {});
+    for (t.container_types.values()) |name| try cg.type_names.put(cg.gpa, name, {});
+    try cg.type_names.put(cg.gpa, "Self", {});
 }
 
 /// Picks collision free Zig names for the class and protocol wrappers.
@@ -198,6 +207,7 @@ fn assignWrapperNames(cg: *Codegen) Error!void {
         // The C typedef standing in for the class already reserved its name.
         try cg.class_names.put(cg.gpa, class.name, class.name);
         try cg.reserved.put(cg.gpa, class.name, {});
+        try cg.type_names.put(cg.gpa, class.name, {});
     }
     for (cg.model.protocols.values()) |protocol| {
         var name = protocol.name;
@@ -209,6 +219,7 @@ fn assignWrapperNames(cg: *Codegen) Error!void {
         }
         try cg.protocol_names.put(cg.gpa, protocol.name, name);
         try cg.reserved.put(cg.gpa, name, {});
+        try cg.type_names.put(cg.gpa, name, {});
     }
     for (cg.model.classes.values()) |class| {
         const mixin = try mixinName(cg.arena, .{ .class = class });
@@ -556,7 +567,8 @@ fn selectorToName(cg: *Codegen, selector: []const u8) Error![]const u8 {
 }
 
 /// Assigns unique names to `entries`. Instance methods get the plain name,
-/// class methods that collide with them get a `_class` suffix.
+/// class methods that collide with them get a `_class` suffix, and names that
+/// collide with a type get a trailing `_`.
 fn assignNames(cg: *Codegen, entries: []Entry, comptime field: []const u8, reserve_helpers: bool) Error!void {
     var taken: std.StringHashMapUnmanaged(void) = .empty;
     defer taken.deinit(cg.gpa);
@@ -570,7 +582,7 @@ fn assignNames(cg: *Codegen, entries: []Entry, comptime field: []const u8, reser
             if (class_pass and taken.contains(name)) {
                 name = try std.fmt.allocPrint(cg.arena, "{s}_class", .{name});
             }
-            while (taken.contains(name)) {
+            while (taken.contains(name) or cg.type_names.contains(name)) {
                 name = try std.fmt.allocPrint(cg.arena, "{s}_", .{name});
             }
             try taken.put(cg.gpa, name, {});

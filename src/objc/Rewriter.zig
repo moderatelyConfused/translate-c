@@ -70,6 +70,9 @@ body_brace: bool = false,
 assume_nonnull: bool = false,
 /// Print timing information to stderr.
 timing: bool = false,
+/// Type context of the `@interface`/`@protocol` whose members are being
+/// parsed, so that C declarations inside it can use its generic parameters.
+member_type_ctx: ?TypeCtx = null,
 
 const Item = struct {
     tag: enum(u8) { orig, synth },
@@ -523,6 +526,22 @@ fn scanToken(r: *Rewriter) Error!void {
                         r.i += 1;
                         r.changed = true;
                         return;
+                    }
+                    // Generic type parameters of the enclosing interface used
+                    // by a C declaration inside it.
+                    if (r.member_type_ctx) |ctx| {
+                        if (ctx.generic_params) |gp| {
+                            if (gp.get(r.slice(r.i))) |bound| {
+                                const text = try r.joinPieces(r.gpa, bound.pieces);
+                                defer r.gpa.free(text);
+                                try r.synthCur(text);
+                                r.i += 1;
+                                if (r.at(r.i) == .angle_bracket_left) {
+                                    if (r.matchAngle(r.i)) |close| r.i = close + 1;
+                                }
+                                return;
+                            }
+                        }
                     }
                     // `NSArray<NSString *> *` / `id<NSCopying>` in C declarations.
                     if (r.at(r.i + 1) == .angle_bracket_left and r.isObjcTypeName(r.slice(r.i))) {
@@ -983,6 +1002,9 @@ fn parseGenericParams(r: *Rewriter, ctx: *MemberCtx, class: *Model.Class) Error!
 // =========================
 
 fn parseMembers(r: *Rewriter, ctx: *MemberCtx) Error!void {
+    const saved_type_ctx = r.member_type_ctx;
+    r.member_type_ctx = typeCtx(ctx);
+    defer r.member_type_ctx = saved_type_ctx;
     while (r.i < r.ids.len) {
         const id = r.ids[r.i];
         switch (id) {
@@ -1951,7 +1973,7 @@ fn blockInC(r: *Rewriter) Error!void {
     }
     r.cur.shrinkRetainingCapacity(start_item);
 
-    const next = try r.blockDeclarator(r.i, @intCast(r.ids.len), .{}, &pieces);
+    const next = try r.blockDeclarator(r.i, @intCast(r.ids.len), r.member_type_ctx orelse .{}, &pieces);
     const text = try r.joinPieces(r.gpa, pieces.items);
     defer r.gpa.free(text);
     try r.synthCur(text);

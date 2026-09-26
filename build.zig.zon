@@ -12,8 +12,8 @@
         // f97cdfc3779aec4b242299e2fc9a1c828c3547c6) with Objective-C related
         // patches; see PATCHES.md in that repository.
         .aro = .{
-            .url = "https://github.com/moderatelyConfused/aro/archive/6b40df837877c9a68a60fccd4c99eaa912a37746.tar.gz",
-            .hash = "aro-0.0.0-JSD1Qsy9NgCjFUZI8gwMe7Pv4HNl0PdwW_lShDPIq10c",
+            .url = "https://github.com/moderatelyConfused/aro/archive/878675851b49c9a57bd60ec367275bf2d4e6ee41.tar.gz",
+            .hash = "aro-0.0.0-JSD1Quu_NgBZ2XWLfA616RCyYBuCMVDvQ_lMpBa5UZSS",
         },
     },
 

@@ -20,6 +20,7 @@ __attribute__((objc_root_class)) extern __attribute__((visibility("default")))
 - (BOOL)isEqualToString:(NSString *)aString;
 + (instancetype)stringWithFormat:(NSString *)format, ...;
 - (void)doThing:(int)x for:(int)y;
+- (IBAction)performAction:(nullable id)sender;
 @end
 
 extern void NSLog(NSString *format, ...);
@@ -52,6 +53,7 @@ extern void NSLog(NSString *format, ...);
 //     pub const isEqualToString = __objc_methods_NSString(@This()).isEqualToString;
 //     pub const stringWithFormat = __objc_methods_NSString(@This()).stringWithFormat;
 //     pub const doThing_for = __objc_methods_NSString(@This()).doThing_for;
+//     pub const performAction = __objc_methods_NSString(@This()).performAction;
 //
 //     // Methods of class `NSObject`
 //     pub const alloc = __objc_methods_NSObject(@This()).alloc;
@@ -95,6 +97,10 @@ extern void NSLog(NSString *format, ...);
 //         /// `- (void)doThing:(int)x for:(int)y`
 //         pub fn doThing_for(self: *Self, x: c_int, y: c_int) void {
 //             __objc.msgSend(self, void, "doThing:for:", .{ x, y });
+//         }
+//         /// `- (void)performAction:(nullable id)sender`
+//         pub fn performAction(self: *Self, sender: ?objc.Object) void {
+//             __objc.msgSend(self, void, "performAction:", .{__objc.idOf(sender)});
 //         }
 //     };
 // }
