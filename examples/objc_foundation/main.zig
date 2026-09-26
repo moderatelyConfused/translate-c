@@ -24,9 +24,10 @@ test "inherited methods and instancetype" {
     const pool = objc.AutoreleasePool.init();
     defer pool.deinit();
 
-    // `+alloc` / `-init` are declared by NSObject but return the receiver type.
-    // `objc/NSObject.h` is not nullability-audited, so both return optionals.
-    const string: *F.NSMutableString = F.NSMutableString.alloc().?.init().?;
+    // `+alloc` comes from the unaudited `objc/NSObject.h` and returns an
+    // optional, while `NSString` redeclares `-init` in a nullability-audited
+    // region, so it returns the receiver type directly.
+    const string: *F.NSMutableString = F.NSMutableString.alloc().?.init();
     defer string.release();
     string.appendString(F.NSString.stringWithUTF8String("abc").?);
     try std.testing.expectEqual(@as(F.NSUInteger, 3), string.length());
