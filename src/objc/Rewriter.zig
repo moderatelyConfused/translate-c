@@ -1720,11 +1720,13 @@ fn emitProperty(
 // Types
 // =========================
 
-/// Identifiers that are dropped from types.
+/// Identifiers that are dropped from types and casts: ownership qualifiers,
+/// `__kindof`, generic variance and the ARC bridge casts (no-ops without ARC).
 fn isStrippedTypeWord(s: []const u8) bool {
     const words = [_][]const u8{
-        "__kindof",        "__strong", "__weak",      "__unsafe_unretained",
-        "__autoreleasing", "__block",  "__covariant", "__contravariant",
+        "__kindof",        "__strong",          "__weak",            "__unsafe_unretained",
+        "__autoreleasing", "__block",           "__covariant",       "__contravariant",
+        "__bridge",        "__bridge_retained", "__bridge_transfer",
     };
     for (words) |w| if (mem.eql(u8, s, w)) return true;
     return false;

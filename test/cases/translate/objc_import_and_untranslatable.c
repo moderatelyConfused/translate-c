@@ -6,6 +6,8 @@
 static inline int uses_objc(void) { return [NSBundle mainBundle] != 0; }
 static inline void uses_literal(void) { void (^b)(void) = ^{ }; b(); }
 static inline int plain(int x) { return x + PLAIN_MACRO; }
+static inline NSBundle *bundle_from_ref(const void *ref) { return (__bridge NSBundle *)ref; }
+static inline const void *ref_from_bundle(NSBundle *bundle) { return (__bridge_retained const void *)bundle; }
 
 @interface NSBundle
 + (NSBundle *)mainBundle;
@@ -20,6 +22,10 @@ static inline int plain(int x) { return x + PLAIN_MACRO; }
 // target=aarch64-macos
 //
 // pub fn plain(arg_x: c_int) callconv(.c) c_int {
+//
+// pub fn bundle_from_ref(arg_ref: ?*const anyopaque) callconv(.c) ?*NSBundle {
+//
+// pub fn ref_from_bundle(arg_bundle: ?*NSBundle) callconv(.c) ?*const anyopaque {
 //
 // pub const NSLocalizedString = @compileError("unable to translate macro: uses Objective-C syntax");
 //
