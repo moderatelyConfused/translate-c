@@ -19,6 +19,8 @@ const helpers = @import("helpers.zig");
 const MacroTranslator = @import("MacroTranslator.zig");
 const PatternList = @import("PatternList.zig");
 const Scope = @import("Scope.zig");
+const ObjcModel = @import("objc/Model.zig");
+const ObjcCodegen = @import("objc/Codegen.zig");
 
 const AnonymousRecordFieldNames = struct {
     pub const Key = struct {
@@ -97,6 +99,11 @@ keep_macro_literals: bool,
 default_init: bool,
 /// Control when to treat a trailing array as a flexible array member.
 strict_flex_arrays: StrictFlexArraysLevel,
+/// The Objective-C declarations found by the rewriter, if it ran.
+objc_model: ?*const ObjcModel,
+/// Whether Objective-C bindings are generated. The output then depends on the
+/// `objc` module (zig-objc).
+objc_mode: bool,
 
 gpa: mem.Allocator,
 arena: mem.Allocator,
@@ -147,6 +154,11 @@ compound_assign_dummy: ?ZigNode = null,
 /// Set of variables whose initializers are currently being translated.
 /// Used to detect self-referential initializers.
 wip_var_inits: std.AutoHashMapUnmanaged(Node.Index, void) = .empty,
+
+/// Block signature typedefs (`__objc_blocksig_<n>`) created by the
+/// Objective-C rewriter, keyed by the name of the block struct they belong to.
+block_sigs: std.StringHashMapUnmanaged(QualType) = .empty,
+block_sigs_collected: bool = false,
 
 pub fn getMangle(t: *Translator) u32 {
     t.mangle_count += 1;
@@ -250,6 +262,10 @@ pub const Options = struct {
     keep_macro_literals: bool,
     default_init: bool,
     strict_flex_arrays: StrictFlexArraysLevel,
+    /// Objective-C declarations found by `objc.Rewriter`, if any.
+    objc_model: ?*const ObjcModel = null,
+    /// Generate Objective-C bindings (requires `objc_model`).
+    objc_mode: bool = false,
 };
 
 pub fn translate(options: Options) mem.Allocator.Error![]u8 {
@@ -271,6 +287,8 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
         .keep_macro_literals = options.keep_macro_literals,
         .default_init = options.default_init,
         .strict_flex_arrays = options.strict_flex_arrays,
+        .objc_model = options.objc_model,
+        .objc_mode = options.objc_mode and options.objc_model != null,
     };
     translator.global_scope.* = Scope.Root.init(&translator);
     defer {
@@ -285,6 +303,7 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
         translator.typedefs.deinit(gpa);
         translator.global_scope.deinit();
         translator.wip_var_inits.deinit(gpa);
+        translator.block_sigs.deinit(gpa);
     }
 
     try translator.prepopulateGlobalNameTable();
@@ -303,6 +322,13 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
     }
 
     try translator.global_scope.processContainerMemberFns();
+
+    // The Objective-C bindings are generated before rendering because they
+    // may translate additional C types, which are added to the global scope.
+    const objc_text: ?[]const u8 = if (translator.objc_mode)
+        try ObjcCodegen.generate(&translator, translator.objc_model.?)
+    else
+        null;
 
     var allocating: std.Io.Writer.Allocating = .init(gpa);
     defer allocating.deinit();
@@ -334,7 +360,117 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
         zig_ast.deinit(gpa);
     }
     zig_ast.render(gpa, &allocating.writer, .{}) catch return error.OutOfMemory;
+    if (objc_text) |text| {
+        allocating.writer.writeAll(text) catch return error.OutOfMemory;
+    }
     return allocating.toOwnedSlice();
+}
+
+/// Whether `name` is a synthetic declaration created by the Objective-C
+/// rewriter that must not be translated as a normal C declaration.
+fn isObjcSyntheticName(name: []const u8) bool {
+    return mem.startsWith(u8, name, "__objc_m_") or
+        mem.startsWith(u8, name, "__objc_blocksig_") or
+        mem.startsWith(u8, name, "__objc_block_");
+}
+
+/// Objective-C runtime types that are aliased to zig-objc's own translation of
+/// `objc/runtime.h` so that both agree on the types.
+const objc_runtime_typedefs = std.StaticStringMap(void).initComptime(.{
+    .{"id"},   .{"Class"},  .{"SEL"},      .{"IMP"},             .{"BOOL"},
+    .{"Ivar"}, .{"Method"}, .{"Category"}, .{"objc_property_t"}, .{"objc_super"},
+});
+const objc_runtime_records = std.StaticStringMap(void).initComptime(.{
+    .{"objc_object"}, .{"objc_class"}, .{"objc_selector"}, .{"objc_super"},
+    .{"objc_method"}, .{"objc_ivar"},  .{"objc_category"}, .{"objc_property"},
+});
+
+/// Translates the pointer type `struct __objc_block_<n> *` created by the
+/// Objective-C rewriter for a block. In Objective-C mode this is a typed
+/// `__objc.Block(fn (...) callconv(.c) R)`, otherwise an opaque pointer.
+pub fn transObjcBlockType(t: *Translator, record_name: []const u8, source_loc: TokenIndex) TypeError!ZigNode {
+    const opaque_ptr = try ZigTag.optional_type.create(t.arena, try ZigTag.single_pointer.create(t.arena, .{
+        .is_const = true,
+        .is_volatile = false,
+        .is_allowzero = false,
+        .elem_type = try ZigTag.type.create(t.arena, "anyopaque"),
+    }));
+    if (!t.objc_mode) return opaque_ptr;
+
+    if (!t.block_sigs_collected) {
+        t.block_sigs_collected = true;
+        for (t.tree.root_decls.items) |decl| switch (decl.get(t.tree)) {
+            .typedef => |typedef_decl| {
+                const name = t.tree.tokSlice(typedef_decl.name_tok);
+                if (mem.cutPrefix(u8, name, "__objc_blocksig_")) |index| {
+                    const key = try std.fmt.allocPrint(t.arena, "__objc_block_{s}", .{index});
+                    try t.block_sigs.put(t.gpa, key, typedef_decl.qt);
+                }
+            },
+            else => {},
+        };
+    }
+    const sig_qt = t.block_sigs.get(record_name) orelse return opaque_ptr;
+    const fn_ptr = sig_qt.get(t.comp, .pointer) orelse return opaque_ptr;
+    const fn_node = try t.transType(&t.global_scope.base, fn_ptr.child, source_loc);
+    const args = try t.arena.alloc(ZigNode, 1);
+    args[0] = fn_node;
+    return ZigTag.call.create(t.arena, .{
+        .lhs = try ZigTag.field_access.create(t.arena, .{
+            .lhs = try ZigTag.identifier.create(t.arena, "__objc"),
+            .field_name = "Block",
+        }),
+        .args = args,
+    });
+}
+
+/// Translates pointers to Objective-C objects and blocks. Returns null for
+/// pointers that are not Objective-C specific.
+fn transObjcPointer(t: *Translator, pointer_ty: Type.Pointer, source_loc: TokenIndex) TypeError!?ZigNode {
+    const model = t.objc_model orelse return null;
+    const child = pointer_ty.child;
+    switch (child.type(t.comp)) {
+        .typedef => |typedef_ty| {
+            const name = typedef_ty.name.lookup(t.comp);
+            if (!model.classes.contains(name)) return null;
+            // Objects are always mutable and cannot be indexed, so translate
+            // `Foo *` as a single pointer to the wrapper type.
+            const ptr = try ZigTag.single_pointer.create(t.arena, .{
+                .is_const = false,
+                .is_volatile = false,
+                .is_allowzero = false,
+                .elem_type = try ZigTag.identifier.create(t.arena, name),
+            });
+            if (pointer_ty.nullability == .nonnull) return ptr;
+            return try ZigTag.optional_type.create(t.arena, ptr);
+        },
+        .@"struct" => |record_ty| {
+            const name = record_ty.name.lookup(t.comp);
+            if (mem.startsWith(u8, name, "__objc_block_")) {
+                return try t.transObjcBlockType(name, source_loc);
+            }
+            // `id`, `Class` and `SEL` lose their typedef when they carry a
+            // nullability qualifier; map them back to zig-objc's types so that
+            // the translation agrees with it.
+            if (t.objc_mode) {
+                if (mem.eql(u8, name, "objc_object")) return try t.objcRuntimeAlias("id");
+                if (mem.eql(u8, name, "objc_class")) return try t.objcRuntimeAlias("Class");
+                if (mem.eql(u8, name, "objc_selector")) return try t.objcRuntimeAlias("SEL");
+            }
+            return null;
+        },
+        else => return null,
+    }
+}
+
+fn objcRuntimeAlias(t: *Translator, name: []const u8) Error!ZigNode {
+    return ZigTag.field_access.create(t.arena, .{
+        .lhs = try ZigTag.field_access.create(t.arena, .{
+            .lhs = try ZigTag.identifier.create(t.arena, "objc"),
+            .field_name = "c",
+        }),
+        .field_name = name,
+    });
 }
 
 fn prepopulateGlobalNameTable(t: *Translator) !void {
@@ -437,6 +573,7 @@ fn transDecl(t: *Translator, scope: *Scope, decl: Node.Index) !void {
         .typedef => |typedef_decl| {
             // Implicit typedefs are translated only if referenced.
             if (typedef_decl.implicit) return;
+            if (t.objc_model != null and isObjcSyntheticName(t.tree.tokSlice(typedef_decl.name_tok))) return;
             try t.transTypeDef(scope, decl);
         },
 
@@ -447,6 +584,11 @@ fn transDecl(t: *Translator, scope: *Scope, decl: Node.Index) !void {
         .struct_forward_decl, .union_forward_decl => |record_decl| {
             if (record_decl.definition) |some| {
                 return t.transDecl(scope, some);
+            }
+            if (t.objc_model != null) {
+                if (record_decl.container_qt.getRecord(t.comp)) |record| {
+                    if (isObjcSyntheticName(record.name.lookup(t.comp))) return;
+                }
             }
             try t.transRecordDecl(scope, record_decl.container_qt);
         },
@@ -467,6 +609,7 @@ fn transDecl(t: *Translator, scope: *Scope, decl: Node.Index) !void {
         => return,
 
         .function => |function| {
+            if (t.objc_model != null and isObjcSyntheticName(t.tree.tokSlice(function.name_tok))) return;
             // If there is going to be a definition later, wait until we reach it before
             // generating it. This works because Zig has order independent analysis and
             // is fine with the definition appearing later. However, since C has order
@@ -520,6 +663,23 @@ fn transTypeDef(t: *Translator, scope: *Scope, typedef_node: Node.Index) Error!v
 
     if (builtin_typedef_map.get(name)) |builtin| {
         return t.typedef_decls.putNoClobber(t.gpa, typedef_node, builtin);
+    }
+    if (toplevel and t.objc_mode) {
+        if (t.objc_model.?.classes.contains(name)) {
+            // The wrapper type is generated by the Objective-C code generator;
+            // only reserve the name here.
+            try t.typedef_decls.putNoClobber(t.gpa, typedef_node, name);
+            try t.global_scope.sym_table.put(t.gpa, name, ZigTag.opaque_literal.init());
+            return;
+        }
+        if (objc_runtime_typedefs.has(name)) {
+            try t.typedef_decls.putNoClobber(t.gpa, typedef_node, name);
+            const node = try ZigTag.pub_var_simple.create(t.arena, .{
+                .name = name,
+                .init = try t.objcRuntimeAlias(name),
+            });
+            return t.addTopLevelDecl(name, node);
+        }
     }
     if (!toplevel) name = try bs.makeMangledName(name);
     try t.typedef_decls.putNoClobber(t.gpa, typedef_node, name);
@@ -600,6 +760,17 @@ fn transRecordDecl(t: *Translator, scope: *Scope, record_qt: QualType) Error!voi
     }
     if (!toplevel) name = try bs.makeMangledName(name);
     try t.container_types.putNoClobber(t.gpa, base.qt.unqualified(), name);
+
+    if (toplevel and t.objc_mode and !is_unnamed and objc_runtime_records.has(bare_name) and container_kind == .@"struct") {
+        // Alias the Objective-C runtime structures to zig-objc's translation.
+        const alias_name = try std.fmt.allocPrint(t.arena, "struct_{s}", .{bare_name});
+        const node = try ZigTag.pub_var_simple.create(t.arena, .{
+            .name = name,
+            .init = try t.objcRuntimeAlias(alias_name),
+        });
+        if (record_ty.layout == null) try t.opaque_demotes.put(t.gpa, base.qt, {});
+        return t.addTopLevelDecl(name, node);
+    }
 
     const is_pub = toplevel and !is_unnamed;
     const init_node = init: {
@@ -1162,7 +1333,7 @@ fn getTypeStr(t: *Translator, qt: QualType) ![]const u8 {
     return t.arena.dupe(u8, allocating.written());
 }
 
-fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex) TypeError!ZigNode {
+pub fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex) TypeError!ZigNode {
     switch (qt.type(t.comp)) {
         .atomic => {
             const type_name = try t.getTypeStr(qt);
@@ -1203,6 +1374,8 @@ fn transType(t: *Translator, scope: *Scope, qt: QualType, source_loc: TokenIndex
             .float128x => unreachable, // Unsupported on all targets
         },
         .pointer => |pointer_ty| {
+            if (try t.transObjcPointer(pointer_ty, source_loc)) |node| return node;
+
             const child_qt = pointer_ty.child;
 
             const is_fn_proto = child_qt.is(t.comp, .func);
@@ -1584,7 +1757,7 @@ fn transTypeInit(
 // Type helpers
 // ============
 
-fn typeIsOpaque(t: *Translator, qt: QualType) bool {
+pub fn typeIsOpaque(t: *Translator, qt: QualType) bool {
     return switch (qt.base(t.comp).type) {
         .void => true,
         .@"struct", .@"union" => |record_ty| {
@@ -1598,7 +1771,7 @@ fn typeIsOpaque(t: *Translator, qt: QualType) bool {
     };
 }
 
-fn typeWasDemotedToOpaque(t: *Translator, qt: QualType) bool {
+pub fn typeWasDemotedToOpaque(t: *Translator, qt: QualType) bool {
     return t.opaque_demotes.contains(qt.base(t.comp).qt);
 }
 
@@ -4338,15 +4511,21 @@ fn transMacros(t: *Translator) !void {
 
         tok_list.items.len = 0;
         try tok_list.ensureUnusedCapacity(t.gpa, macro.tokens.len);
+        var uses_objc = false;
         for (macro.tokens) |tok| {
             switch (tok.id) {
                 .invalid => continue,
                 .whitespace => continue,
                 .comment => continue,
                 .macro_ws => continue,
+                .at => uses_objc = true,
                 else => {},
             }
             tok_list.appendAssumeCapacity(tok);
+        }
+        if (uses_objc) {
+            try t.failDeclExtra(&t.global_scope.base, macro.loc, name, "unable to translate macro: uses Objective-C syntax", .{});
+            continue;
         }
 
         if (macro.is_func) {

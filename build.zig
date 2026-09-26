@@ -135,12 +135,76 @@ pub fn build(b: *std.Build) void {
         test_run_translated_step,
     );
 
+    const test_objc_step = b.step("test-objc", "Compile-check generated Objective-C bindings against zig-objc");
+    addObjcTests(b, translator_conf, optimize, test_objc_step);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(test_fmt_step);
     test_step.dependOn(test_unit_step);
     test_step.dependOn(test_macros_step);
     if (!skip_translate) test_step.dependOn(test_translate_step);
     if (!skip_run_translated) test_step.dependOn(test_run_translated_step);
+    test_step.dependOn(test_objc_step);
+}
+
+/// Translates `test/objc/Foundation.h` (a small Foundation look-alike) with
+/// Objective-C bindings enabled and compiles a program using them together
+/// with zig-objc, for each Apple target. Nothing is run, so this works on any
+/// host; the Objective-C runtime headers come from `test/objc/runtime` and
+/// zig-objc's sources are vendored in `test/objc/zig-objc`.
+fn addObjcTests(
+    b: *std.Build,
+    translator_conf: Translator.TranslateCConfig,
+    optimize: std.builtin.OptimizeMode,
+    test_objc_step: *std.Build.Step,
+) void {
+    const runtime_include = b.path("test/objc/runtime");
+
+    for ([_][]const u8{ "aarch64-macos", "x86_64-macos" }) |triple| {
+        const query = std.Target.Query.parse(.{ .arch_os_abi = triple }) catch unreachable;
+        const target = b.resolveTargetQuery(query);
+
+        // zig-objc expects an `objc-c` import: the plain C translation of the
+        // Objective-C runtime headers.
+        const runtime: Translator = .initInner(b, translator_conf, .{
+            .name = b.fmt("objc-runtime-{s}", .{triple}),
+            .c_source_file = b.path("test/objc/objc_runtime.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        runtime.addIncludePath(runtime_include);
+
+        const objc_module = b.createModule(.{
+            .root_source_file = b.path("test/objc/zig-objc/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "objc-c", .module = runtime.mod }},
+        });
+
+        const foundation: Translator = .initInner(b, translator_conf, .{
+            .name = b.fmt("objc-foundation-{s}", .{triple}),
+            .c_source_file = b.path("test/objc/Foundation.h"),
+            .target = target,
+            .optimize = optimize,
+            .objc = true,
+            .objc_module = objc_module,
+        });
+        foundation.addIncludePath(runtime_include);
+
+        const compile_test = b.addObject(.{
+            .name = b.fmt("objc-compile-test-{s}", .{triple}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/objc/compile_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "foundation", .module = foundation.mod },
+                    .{ .name = "objc", .module = objc_module },
+                },
+            }),
+        });
+        test_objc_step.dependOn(&compile_test.step);
+    }
 }
 
 const std = @import("std");

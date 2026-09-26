@@ -12,6 +12,8 @@ const aro = @import("aro");
 const build_options = @import("build_options");
 
 const Translator = @import("Translator.zig");
+const ObjcModel = @import("objc/Model.zig");
+const ObjcRewriter = @import("objc/Rewriter.zig");
 
 const OptimizeMode = enum {
     Debug,
@@ -102,6 +104,9 @@ pub const usage =
     \\                                1: size [0]/[1]/[]
     \\                                2: size [0]/[]
     \\                                3: [] only
+    \\  -fobjc                      Translate Objective-C headers and generate zig-objc bindings
+    \\  -fno-objc                   (default) Only generate bindings if Objective-C syntax is found
+    \\  -fobjc-timing               Print how long the Objective-C rewriter took (for debugging)
     \\
     \\
 ;
@@ -123,6 +128,8 @@ fn translate(
     var keep_macro_literals = true;
     var default_init = false;
     var strict_flex_arrays: Translator.StrictFlexArraysLevel = .@"2";
+    var objc = false;
+    var objc_timing = false;
     var target_query: std.Target.Query = .{};
     var link_libc = false;
     var link_libcpp = false;
@@ -171,6 +178,12 @@ fn translate(
             default_init = true;
         } else if (mem.eql(u8, arg, "-fno-default-init")) {
             default_init = false;
+        } else if (mem.eql(u8, arg, "-fobjc")) {
+            objc = true;
+        } else if (mem.eql(u8, arg, "-fno-objc")) {
+            objc = false;
+        } else if (mem.eql(u8, arg, "-fobjc-timing")) {
+            objc_timing = true;
         } else if (mem.cutPrefix(u8, arg, "-fstrict-flex-arrays=")) |rest| {
             if (rest.len != 1 or rest[0] < '0' or rest[0] > '3') {
                 return d.fatal("-fstrict-flex-arrays= requires a value of '0', '1', '2', or '3'", .{});
@@ -227,6 +240,9 @@ fn translate(
     const zig_lib_path = opt_zig_lib_path orelse fatal("missing --zig-lib=[path] argument", .{});
 
     try aro_args.append(arena, "-nostdlibinc");
+    if (objc) {
+        try aro_args.appendSlice(arena, &.{ "-x", "objective-c" });
+    }
 
     switch (optimize_mode) {
         .Debug => {
@@ -472,6 +488,12 @@ fn translate(
         .implicit_includes = d.implicit_includes.items,
     });
 
+    // Rewrite Objective-C declarations into C before parsing.
+    var objc_arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer objc_arena_state.deinit();
+    var objc_model = ObjcModel.init(objc_arena_state.allocator());
+    try ObjcRewriter.run(gpa, &pp, &objc_model, .{ .timing = objc_timing });
+
     var c_tree = try pp.parse();
     defer c_tree.deinit();
 
@@ -504,6 +526,8 @@ fn translate(
         .keep_macro_literals = keep_macro_literals,
         .default_init = default_init,
         .strict_flex_arrays = strict_flex_arrays,
+        .objc_model = &objc_model,
+        .objc_mode = objc or objc_model.enabled,
     });
     defer gpa.free(rendered_zig);
 
@@ -578,6 +602,7 @@ comptime {
         _ = Translator;
         _ = @import("helpers.zig");
         _ = @import("PatternList.zig");
+        _ = ObjcRewriter;
     }
 }
 

@@ -77,6 +77,16 @@ pub const Options = struct {
     libc_file: ?std.Build.LazyPath = null,
     /// Extra arguments passed to Aro
     extra_args: []const []const u8 = &.{},
+    /// Translate the source as Objective-C and generate bindings that use
+    /// zig-objc (https://github.com/mitchellh/zig-objc). The `objc` module of
+    /// zig-objc must then be passed as `objc_module` (or added to `mod` as an
+    /// import named "objc" by the caller).
+    objc: bool = false,
+    /// The `objc` module from zig-objc, added to `mod` as the import named
+    /// "objc". Required by the generated code when Objective-C bindings are
+    /// generated, which also happens automatically when the translated header
+    /// contains Objective-C declarations.
+    objc_module: ?*Build.Module = null,
 };
 
 pub fn init(translate_c_dep: *Build.Dependency, options: Options) Translator {
@@ -143,6 +153,9 @@ pub fn initInner(
         .cwd_relative = b.graph.zig_lib_directory.path orelse
             std.process.fatal("zig_lib_directory missing in build graph", .{}),
     });
+
+    if (options.objc) run.addArg("-fobjc");
+    if (options.objc_module) |objc_module| mod.addImport("objc", objc_module);
 
     addFlag(run, "module-libs", options.module_libs);
     addFlag(run, "pub-static", options.pub_static);

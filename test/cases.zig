@@ -103,6 +103,8 @@ pub fn lowerCases(
                 while (arg_it.next()) |arg| {
                     if (mem.eql(u8, arg, "-fdefault-init")) {
                         options.default_init = true;
+                    } else if (mem.eql(u8, arg, "-fobjc")) {
+                        options.objc = true;
                     } else if (mem.cutPrefix(u8, arg, "-fstrict-flex-arrays=")) |rest| {
                         if (rest.len != 1 or rest[0] < '0' or rest[0] > '3') {
                             @panic("Bad case: -fstrict-flex-arrays= requires a value of '0', '1', '2', or '3'");
