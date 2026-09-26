@@ -83,6 +83,17 @@ exe.root_module.addImport("foundation", foundation.mod);
 exe.root_module.linkFramework("Foundation", .{});
 ```
 
+By default the wrapper of every class and protocol is written to a file of its
+own in a directory next to the generated root file (`foundation.h.objc/` for
+`foundation.h.zig`); the root file re-exports them, so the module looks the
+same either way. This matters for editors: Cocoa alone produces some 400k
+lines of bindings, and a language server such as ZLS spends several seconds
+(and blocks every keystroke) whenever it has to analyse such a file as a
+whole, for example after "go to definition" opens it. With one file per class,
+`NSWindow.zig` is a couple of thousand lines. `.objc_split = false` (or
+omitting `-fobjc-dir=<dir>` on the command line, where `<dir>` must be inside
+the output file's directory) puts everything into the root file instead.
+
 ### What the bindings look like
 
 Every class and protocol becomes an `opaque` wrapper type. Objects are plain
@@ -157,8 +168,9 @@ Zig by [`src/objc/Codegen.zig`](src/objc/Codegen.zig), using the types Aro
 resolved for the prototypes.
 
 The `test-objc` build step compile-checks the bindings generated from
-[`test/objc/Foundation.h`](test/objc/Foundation.h) together with a vendored copy
-of zig-objc for `aarch64-macos` and `x86_64-macos`; it runs on any host. The
+[`test/objc/Foundation.h`](test/objc/Foundation.h) (in both output layouts)
+together with a vendored copy of zig-objc for `aarch64-macos` and
+`x86_64-macos`; it runs on any host. The
 real `<Foundation/Foundation.h>` and `<Cocoa/Cocoa.h>` of the macOS 11.3 SDK
 translate without errors (about 145k and 360k lines of Zig), and a program using
 those bindings compiles against zig-objc; see

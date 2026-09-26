@@ -181,29 +181,34 @@ fn addObjcTests(
             .imports = &.{.{ .name = "objc-c", .module = runtime.mod }},
         });
 
-        const foundation: Translator = .initInner(b, translator_conf, .{
-            .name = b.fmt("objc-foundation-{s}", .{triple}),
-            .c_source_file = b.path("test/objc/Foundation.h"),
-            .target = target,
-            .optimize = optimize,
-            .objc = true,
-            .objc_module = objc_module,
-        });
-        foundation.addIncludePath(runtime_include);
-
-        const compile_test = b.addObject(.{
-            .name = b.fmt("objc-compile-test-{s}", .{triple}),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("test/objc/compile_test.zig"),
+        // Both output layouts are checked: one file per class (the default)
+        // and everything in the root file.
+        for ([_]bool{ true, false }) |split| {
+            const foundation: Translator = .initInner(b, translator_conf, .{
+                .name = b.fmt("objc-foundation-{s}{s}", .{ triple, if (split) "" else "-single" }),
+                .c_source_file = b.path("test/objc/Foundation.h"),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "foundation", .module = foundation.mod },
-                    .{ .name = "objc", .module = objc_module },
-                },
-            }),
-        });
-        test_objc_step.dependOn(&compile_test.step);
+                .objc = true,
+                .objc_module = objc_module,
+                .objc_split = split,
+            });
+            foundation.addIncludePath(runtime_include);
+
+            const compile_test = b.addObject(.{
+                .name = b.fmt("objc-compile-test-{s}{s}", .{ triple, if (split) "" else "-single" }),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("test/objc/compile_test.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "foundation", .module = foundation.mod },
+                        .{ .name = "objc", .module = objc_module },
+                    },
+                }),
+            });
+            test_objc_step.dependOn(&compile_test.step);
+        }
     }
 }
 

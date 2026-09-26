@@ -23,15 +23,50 @@ const ast = @import("../ast.zig");
 const ZigNode = ast.Node;
 const ZigTag = ZigNode.Tag;
 const Translator = @import("../Translator.zig");
+const Scope = @import("../Scope.zig");
 const Model = @import("Model.zig");
 
 pub const Error = error{OutOfMemory};
+
+/// A wrapper file produced in split mode, see `Split`.
+pub const File = struct {
+    /// File name inside the wrapper directory.
+    name: []const u8,
+    text: []const u8,
+};
+
+/// Writes every class and protocol wrapper (together with its mixin) to a file
+/// of its own instead of the root file. Editors and language servers then only
+/// have to analyse the wrappers that are actually used, which matters for
+/// frameworks like Cocoa whose single-file bindings run to hundreds of
+/// thousands of lines. The root file re-exports every wrapper, so the module
+/// looks the same to users.
+pub const Split = struct {
+    /// Path of the wrapper directory relative to the directory of the root
+    /// file, using `/` separators. Empty when both are the same directory.
+    import_prefix: []const u8,
+    /// File name of the root file; every wrapper file imports it for the C
+    /// declarations and the `__objc` support code.
+    root_basename: []const u8,
+    /// Receives one entry per wrapper file. Names and contents are allocated
+    /// with the gpa given to `generate`.
+    files: *std.ArrayList(File),
+};
 
 t: *Translator,
 model: *const Model,
 gpa: Allocator,
 arena: Allocator,
+/// The root file.
 out: std.Io.Writer.Allocating,
+/// Where `print`/`write` go: the root file, or the wrapper file being
+/// generated in split mode.
+cur: *std.Io.Writer.Allocating = undefined,
+split: ?Split,
+/// Zig wrapper name -> wrapper file name (split mode).
+file_names: std.StringHashMapUnmanaged([]const u8) = .empty,
+/// Mixin name -> wrapper file name defining it (split mode).
+mixin_files: std.StringHashMapUnmanaged([]const u8) = .empty,
 
 /// Synthetic prototype name -> declaration node.
 protos: std.StringHashMapUnmanaged(Node.Index) = .empty,
@@ -89,21 +124,26 @@ const Entry = struct {
     unavailable: bool = false,
 };
 
-/// Renders the Objective-C bindings for `model`. The returned text is owned
-/// by `t.arena`.
-pub fn generate(t: *Translator, model: *const Model) Error![]const u8 {
+/// Renders the Objective-C bindings for `model` and returns the text appended
+/// to the root file, owned by `t.arena`. In split mode (`split != null`) the
+/// wrappers go to `split.files` instead and the root file only re-exports
+/// them.
+pub fn generate(t: *Translator, model: *const Model, split: ?Split) Error![]const u8 {
     var cg: Codegen = .{
         .t = t,
         .model = model,
         .gpa = t.gpa,
         .arena = t.arena,
         .out = .init(t.gpa),
+        .split = split,
     };
     defer cg.deinit();
+    cg.cur = &cg.out;
 
     try cg.collectProtos();
     try cg.collectReserved();
     try cg.assignWrapperNames();
+    if (split != null) try cg.assignFileNames();
     try cg.prepareMethods();
 
     try cg.emitPrelude();
@@ -111,8 +151,13 @@ pub fn generate(t: *Translator, model: *const Model) Error![]const u8 {
     for (model.aliases.items) |alias| {
         try cg.print("pub const {f} = {f};\n", .{ fmtId(alias.name), fmtId(cg.classZigName(alias.target)) });
     }
-    for (model.classes.values()) |class| try cg.emitClass(class);
-    for (model.protocols.values()) |protocol| try cg.emitProtocol(protocol);
+    if (split != null) {
+        for (model.classes.values()) |class| try cg.emitSplitFile(cg.classZigName(class.name), .{ .class = class });
+        for (model.protocols.values()) |protocol| try cg.emitSplitFile(cg.protocol_names.get(protocol.name).?, .{ .protocol = protocol });
+    } else {
+        for (model.classes.values()) |class| try cg.emitClass(class);
+        for (model.protocols.values()) |protocol| try cg.emitProtocol(protocol);
+    }
 
     return cg.format();
 }
@@ -125,25 +170,32 @@ fn deinit(cg: *Codegen) void {
     cg.protocol_names.deinit(cg.gpa);
     cg.type_names.deinit(cg.gpa);
     cg.specs.deinit(cg.gpa);
+    cg.file_names.deinit(cg.gpa);
+    cg.mixin_files.deinit(cg.gpa);
 }
 
 fn print(cg: *Codegen, comptime fmt: []const u8, args: anytype) Error!void {
-    cg.out.writer.print(fmt, args) catch return error.OutOfMemory;
+    cg.cur.writer.print(fmt, args) catch return error.OutOfMemory;
 }
 
 fn write(cg: *Codegen, text: []const u8) Error!void {
-    cg.out.writer.writeAll(text) catch return error.OutOfMemory;
+    cg.cur.writer.writeAll(text) catch return error.OutOfMemory;
 }
 
 fn fmtId(name: []const u8) std.zig.FormatId {
     return std.zig.fmtId(name);
 }
 
-/// Runs the generated text through the Zig parser and formatter.
+/// Runs the generated root text through the Zig parser and formatter.
 fn format(cg: *Codegen) Error![]const u8 {
     const raw = try cg.out.toOwnedSliceSentinel(0);
     defer cg.gpa.free(raw);
+    return cg.formatRaw(cg.arena, raw);
+}
 
+/// Runs `raw` through the Zig parser and formatter; the result is allocated
+/// with `allocator`.
+fn formatRaw(cg: *Codegen, allocator: Allocator, raw: [:0]const u8) Error![]u8 {
     var tree = try std.zig.Ast.parse(cg.gpa, raw, .zig);
     defer tree.deinit(cg.gpa);
     if (tree.errors.len != 0) {
@@ -160,12 +212,12 @@ fn format(cg: *Codegen) Error![]const u8 {
             w.writeByte('\n') catch return error.OutOfMemory;
         }
         w.writeAll(raw) catch return error.OutOfMemory;
-        return cg.arena.dupe(u8, text.written());
+        return allocator.dupe(u8, text.written());
     }
     var formatted: std.Io.Writer.Allocating = .init(cg.gpa);
     defer formatted.deinit();
     tree.render(cg.gpa, &formatted.writer, .{}) catch return error.OutOfMemory;
-    return cg.arena.dupe(u8, formatted.written());
+    return allocator.dupe(u8, formatted.written());
 }
 
 // =========================
@@ -225,6 +277,34 @@ fn assignWrapperNames(cg: *Codegen) Error!void {
         const mixin = try mixinName(cg.arena, .{ .protocol = protocol });
         try cg.reserved.put(cg.gpa, mixin, {});
     }
+}
+
+/// Split mode: picks a file name for every wrapper. File names are the Zig
+/// wrapper names, kept unique case-insensitively for the benefit of
+/// case-insensitive file systems.
+fn assignFileNames(cg: *Codegen) Error!void {
+    var used: std.StringHashMapUnmanaged(void) = .empty;
+    defer used.deinit(cg.gpa);
+    for (cg.model.classes.values()) |class| {
+        try cg.assignFileName(&used, cg.classZigName(class.name), try mixinName(cg.arena, .{ .class = class }));
+    }
+    for (cg.model.protocols.values()) |protocol| {
+        try cg.assignFileName(&used, cg.protocol_names.get(protocol.name).?, try mixinName(cg.arena, .{ .protocol = protocol }));
+    }
+}
+
+fn assignFileName(cg: *Codegen, used: *std.StringHashMapUnmanaged(void), zig_name: []const u8, mixin: []const u8) Error!void {
+    var stem = zig_name;
+    var n: usize = 2;
+    while (true) : (n += 1) {
+        const lower = try std.ascii.allocLowerString(cg.arena, stem);
+        const gop = try used.getOrPut(cg.gpa, lower);
+        if (!gop.found_existing) break;
+        stem = try std.fmt.allocPrint(cg.arena, "{s}_{d}", .{ zig_name, n });
+    }
+    const file = try std.fmt.allocPrint(cg.arena, "{s}.zig", .{stem});
+    try cg.file_names.put(cg.gpa, zig_name, file);
+    try cg.mixin_files.put(cg.gpa, mixin, file);
 }
 
 /// Translates the signature of every method once, so that wrappers and mixins
@@ -739,6 +819,145 @@ fn ownerEql(a: Owner, b: Owner) bool {
 }
 
 // =========================
+// Split mode
+// =========================
+
+/// Generates the wrapper and the mixin of `owner` into a file of their own
+/// and re-exports the wrapper from the root file.
+fn emitSplitFile(cg: *Codegen, zig_name: []const u8, owner: Owner) Error!void {
+    const split = cg.split.?;
+    const file_name = cg.file_names.get(zig_name).?;
+
+    var body_out: std.Io.Writer.Allocating = .init(cg.gpa);
+    defer body_out.deinit();
+    {
+        cg.cur = &body_out;
+        defer cg.cur = &cg.out;
+        switch (owner) {
+            .class => |class| try cg.emitClass(class),
+            .protocol => |protocol| try cg.emitProtocol(protocol),
+        }
+    }
+    const body = try body_out.toOwnedSliceSentinel(0);
+    defer cg.gpa.free(body);
+
+    var text: std.Io.Writer.Allocating = .init(cg.gpa);
+    defer text.deinit();
+    try cg.writeSplitHeader(&text.writer, file_name, body);
+    text.writer.writeAll(body) catch return error.OutOfMemory;
+    const raw = try text.toOwnedSliceSentinel(0);
+    defer cg.gpa.free(raw);
+
+    const formatted = try cg.formatRaw(cg.gpa, raw);
+    errdefer cg.gpa.free(formatted);
+    const name = try cg.gpa.dupe(u8, file_name);
+    errdefer cg.gpa.free(name);
+    try split.files.append(cg.gpa, .{ .name = name, .text = formatted });
+
+    try cg.print("pub const {f} = @import(\"", .{fmtId(zig_name)});
+    if (split.import_prefix.len != 0) {
+        try cg.writeStringContents(split.import_prefix);
+        try cg.write("/");
+    }
+    try cg.writeStringContents(file_name);
+    try cg.print("\").{f};\n", .{fmtId(zig_name)});
+}
+
+/// Writes the imports a wrapper file needs: the file is scanned for
+/// identifiers that name declarations of the root file, other wrappers or
+/// other mixins. Declared names (`fn name`, `name =`, `name:`) and fields
+/// (`.name`) are not references to file scope.
+fn writeSplitHeader(cg: *Codegen, w: *std.Io.Writer, file_name: []const u8, body: [:0]const u8) Error!void {
+    const split = cg.split.?;
+
+    var names: std.StringArrayHashMapUnmanaged(void) = .empty;
+    defer names.deinit(cg.gpa);
+    var tokenizer: std.zig.Tokenizer = .init(body);
+    var prev: std.zig.Token.Tag = .invalid;
+    // An identifier is only known to be a reference once the next token is
+    // seen: `name =` and `name:` declare rather than reference.
+    var pending: ?std.zig.Token = null;
+    while (true) {
+        const tok = tokenizer.next();
+        if (pending) |candidate| {
+            pending = null;
+            if (tok.tag != .equal and tok.tag != .colon) {
+                const raw = body[candidate.loc.start..candidate.loc.end];
+                const name = if (raw[0] == '@')
+                    std.zig.string_literal.parseAlloc(cg.arena, raw[1..]) catch null
+                else
+                    raw;
+                if (name) |n| try names.put(cg.gpa, n, {});
+            }
+        }
+        if (tok.tag == .eof) break;
+        defer prev = tok.tag;
+        if (tok.tag != .identifier) continue;
+        switch (prev) {
+            .period, .keyword_fn => continue,
+            else => {},
+        }
+        pending = tok;
+    }
+    const keys = names.keys();
+    mem.sort([]const u8, keys, {}, stringLessThan);
+
+    // The root file: `../` once per component of the import prefix.
+    w.writeAll("const __root = @import(\"") catch return error.OutOfMemory;
+    var components = mem.tokenizeScalar(u8, split.import_prefix, '/');
+    while (components.next() != null) w.writeAll("../") catch return error.OutOfMemory;
+    try writeStringContentsTo(w, split.root_basename);
+    w.writeAll("\");\n") catch return error.OutOfMemory;
+
+    for (keys) |name| {
+        if (mem.eql(u8, name, "__root") or mem.eql(u8, name, "Self")) continue;
+        if (mem.eql(u8, name, "objc")) {
+            w.writeAll("const objc = @import(\"objc\");\n") catch return error.OutOfMemory;
+        } else if (mem.eql(u8, name, "std")) {
+            w.writeAll("const std = @import(\"std\");\n") catch return error.OutOfMemory;
+        } else if (mem.eql(u8, name, "__objc")) {
+            w.writeAll("const __objc = __root.__objc;\n") catch return error.OutOfMemory;
+        } else if (cg.file_names.get(name) orelse cg.mixin_files.get(name)) |file| {
+            if (mem.eql(u8, file, file_name)) continue;
+            w.print("const {f} = @import(\"", .{fmtId(name)}) catch return error.OutOfMemory;
+            try writeStringContentsTo(w, file);
+            w.print("\").{f};\n", .{fmtId(name)}) catch return error.OutOfMemory;
+        } else if (cg.isRootName(name)) {
+            w.print("const {f} = __root.{f};\n", .{ fmtId(name), fmtId(name) }) catch return error.OutOfMemory;
+        }
+    }
+    w.writeAll("\n") catch return error.OutOfMemory;
+}
+
+/// Whether `name` is declared at the top level of the root file. Besides the
+/// names collected up front, this includes the C types that were translated
+/// on demand while generating method signatures.
+fn isRootName(cg: *const Codegen, name: []const u8) bool {
+    if (cg.reserved.contains(name) or cg.type_names.contains(name)) return true;
+    const t = cg.t;
+    return t.global_scope.sym_table.contains(name) or t.global_names.contains(name) or
+        t.weak_global_names.contains(name) or t.typedefs.contains(name);
+}
+
+fn stringLessThan(_: void, a: []const u8, b: []const u8) bool {
+    return mem.order(u8, a, b) == .lt;
+}
+
+/// Writes `text` as the contents of a Zig string literal.
+fn writeStringContents(cg: *Codegen, text: []const u8) Error!void {
+    try writeStringContentsTo(&cg.cur.writer, text);
+}
+
+fn writeStringContentsTo(w: *std.Io.Writer, text: []const u8) Error!void {
+    for (text) |c| {
+        switch (c) {
+            '"', '\\' => w.print("\\{c}", .{c}) catch return error.OutOfMemory,
+            else => w.writeByte(c) catch return error.OutOfMemory,
+        }
+    }
+}
+
+// =========================
 // Mixins
 // =========================
 
@@ -1105,4 +1324,87 @@ test "per-instantiation class cache pattern" {
     try std.testing.expectEqualStrings("A", Helpers.ClassHelpers(A, "A").class());
     try std.testing.expectEqualStrings("B", Helpers.ClassHelpers(B, "B").class());
     try std.testing.expectEqualStrings("A", Helpers.ClassHelpers(A, "A").class());
+}
+
+test "split file header imports what the wrapper references" {
+    const gpa = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    var files: std.ArrayList(File) = .empty;
+    defer files.deinit(gpa);
+    // Only the name tables of the translator are consulted.
+    var translator: Translator = .{
+        .gpa = gpa,
+        .arena = arena_state.allocator(),
+        .alias_list = .empty,
+        .global_scope = try arena_state.allocator().create(Scope.Root),
+        .comp = undefined,
+        .pp = undefined,
+        .tree = undefined,
+        .pub_static = false,
+        .func_bodies = false,
+        .keep_macro_literals = false,
+        .default_init = false,
+        .strict_flex_arrays = .@"2",
+        .objc_model = null,
+        .objc_mode = false,
+    };
+    translator.global_scope.* = Scope.Root.init(&translator);
+    defer translator.global_scope.deinit();
+    defer translator.typedefs.deinit(gpa);
+    try translator.typedefs.put(gpa, "CGFloat", {});
+    try translator.global_scope.sym_table.put(gpa, "struct_CGPath", ZigTag.opaque_literal.init());
+    var cg: Codegen = .{
+        .t = &translator,
+        .model = undefined,
+        .gpa = gpa,
+        .arena = arena_state.allocator(),
+        .out = .init(gpa),
+        .split = .{ .import_prefix = "c.objc", .root_basename = "c.zig", .files = &files },
+    };
+    defer cg.deinit();
+    cg.cur = &cg.out;
+    try cg.file_names.put(gpa, "NSWindow", "NSWindow.zig");
+    try cg.file_names.put(gpa, "NSString", "NSString.zig");
+    try cg.mixin_files.put(gpa, "__objc_methods_NSWindow", "NSWindow.zig");
+    try cg.mixin_files.put(gpa, "__objc_methods_NSObject", "NSObject.zig");
+    for ([_][]const u8{ "objc", "__objc", "__root", "std", "NSRect", "frame", "error" }) |name| try cg.reserved.put(gpa, name, {});
+    for ([_][]const u8{ "Self", "NSRect", "NSWindow", "NSString" }) |name| try cg.type_names.put(gpa, name, {});
+
+    const body =
+        \\pub const NSWindow = opaque {
+        \\    pub const as = __objc.Helpers(@This()).as;
+        \\    pub const hash = __objc_methods_NSObject(@This()).hash;
+        \\    pub const frame = __objc_methods_NSWindow(@This()).frame;
+        \\    pub const @"error" = __objc_methods_NSWindow(@This()).@"error";
+        \\};
+        \\pub fn __objc_methods_NSWindow(comptime Self: type) type {
+        \\    return struct {
+        \\        pub fn frame(self: *Self, title: ?*NSString, x: CGFloat, path: ?*const struct_CGPath) NSRect {
+        \\            return __objc.msgSend(self, NSRect, "frame", .{ objc.Object.fromId(title), x, path });
+        \\        }
+        \\        pub fn @"error"(self: *Self, code: @"error") void {
+        \\            _ = self;
+        \\            _ = code;
+        \\        }
+        \\    };
+        \\}
+        \\
+    ;
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try cg.writeSplitHeader(&text.writer, "NSWindow.zig", body);
+    try std.testing.expectEqualStrings(
+        \\const __root = @import("../c.zig");
+        \\const CGFloat = __root.CGFloat;
+        \\const NSRect = __root.NSRect;
+        \\const NSString = @import("NSString.zig").NSString;
+        \\const __objc = __root.__objc;
+        \\const __objc_methods_NSObject = @import("NSObject.zig").__objc_methods_NSObject;
+        \\const @"error" = __root.@"error";
+        \\const objc = @import("objc");
+        \\const struct_CGPath = __root.struct_CGPath;
+        \\
+        \\
+    , text.written());
 }

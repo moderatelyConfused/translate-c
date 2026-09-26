@@ -14,6 +14,7 @@ const build_options = @import("build_options");
 const Translator = @import("Translator.zig");
 const ObjcModel = @import("objc/Model.zig");
 const ObjcRewriter = @import("objc/Rewriter.zig");
+const ObjcCodegen = @import("objc/Codegen.zig");
 
 const OptimizeMode = enum {
     Debug,
@@ -107,6 +108,8 @@ pub const usage =
     \\  -fobjc                      Translate Objective-C headers and generate zig-objc bindings
     \\  -fno-objc                   (default) Only generate bindings if Objective-C syntax is found
     \\  -fobjc-timing               Print how long the Objective-C rewriter took (for debugging)
+    \\  -fobjc-dir=[dir]            Write one Zig file per Objective-C class/protocol into [dir], which must be
+    \\                              inside the output file's directory (keeps editors responsive on big frameworks)
     \\
     \\
 ;
@@ -130,6 +133,7 @@ fn translate(
     var strict_flex_arrays: Translator.StrictFlexArraysLevel = .@"2";
     var objc = false;
     var objc_timing = false;
+    var objc_dir: ?[]const u8 = null;
     var target_query: std.Target.Query = .{};
     var link_libc = false;
     var link_libcpp = false;
@@ -184,6 +188,8 @@ fn translate(
             objc = false;
         } else if (mem.eql(u8, arg, "-fobjc-timing")) {
             objc_timing = true;
+        } else if (mem.cutPrefix(u8, arg, "-fobjc-dir=")) |rest| {
+            objc_dir = rest;
         } else if (mem.cutPrefix(u8, arg, "-fstrict-flex-arrays=")) |rest| {
             if (rest.len != 1 or rest[0] < '0' or rest[0] > '3') {
                 return d.fatal("-fstrict-flex-arrays= requires a value of '0', '1', '2', or '3'", .{});
@@ -515,6 +521,41 @@ fn translate(
             return d.fatal("unable to write dependency file: {s}", .{aro.Driver.errorDescription(file_writer.err.?)});
     }
 
+    // Split mode: the wrapper files must sit inside the output file's directory
+    // so that the root file can `@import` them.
+    var objc_files: std.ArrayList(ObjcCodegen.File) = .empty;
+    defer {
+        for (objc_files.items) |file| {
+            gpa.free(file.name);
+            gpa.free(file.text);
+        }
+        objc_files.deinit(gpa);
+    }
+    const objc_split: ?ObjcCodegen.Split = if (objc_dir) |dir| blk: {
+        const out_path = d.output_name orelse
+            return d.fatal("-fobjc-dir requires an output file (-o)", .{});
+        if (std.mem.eql(u8, out_path, "-")) return d.fatal("-fobjc-dir requires an output file (-o)", .{});
+        const out_dir = try std.fs.path.resolve(arena, &.{std.fs.path.dirname(out_path) orelse "."});
+        const wrapper_dir = try std.fs.path.resolve(arena, &.{dir});
+        const inside_cwd = std.mem.eql(u8, out_dir, ".") and !std.fs.path.isAbsolute(wrapper_dir) and
+            !std.mem.eql(u8, wrapper_dir, "..") and !std.mem.startsWith(u8, wrapper_dir, ".." ++ std.fs.path.sep_str);
+        const prefix = if (std.mem.eql(u8, wrapper_dir, out_dir) or std.mem.eql(u8, wrapper_dir, "."))
+            ""
+        else if (inside_cwd)
+            wrapper_dir
+        else if (std.mem.startsWith(u8, wrapper_dir, out_dir) and wrapper_dir[out_dir.len] == std.fs.path.sep)
+            wrapper_dir[out_dir.len + 1 ..]
+        else
+            return d.fatal("-fobjc-dir: '{s}' is not inside the directory of the output file '{s}'", .{ dir, out_path });
+        const import_prefix = try arena.dupe(u8, prefix);
+        if (std.fs.path.sep != '/') std.mem.replaceScalar(u8, import_prefix, std.fs.path.sep, '/');
+        break :blk .{
+            .import_prefix = import_prefix,
+            .root_basename = std.fs.path.basename(out_path),
+            .files = &objc_files,
+        };
+    } else null;
+
     const rendered_zig = try Translator.translate(.{
         .gpa = gpa,
         .comp = d.comp,
@@ -528,8 +569,27 @@ fn translate(
         .strict_flex_arrays = strict_flex_arrays,
         .objc_model = &objc_model,
         .objc_mode = objc or objc_model.enabled,
+        .objc_split = objc_split,
     });
     defer gpa.free(rendered_zig);
+
+    if (objc_files.items.len != 0) {
+        const dir = objc_dir.?;
+        Io.Dir.cwd().createDirPath(io, dir) catch |err|
+            return d.fatal("failed to create directory '{s}': {s}", .{ dir, aro.Driver.errorDescription(err) });
+        for (objc_files.items) |file| {
+            const path = try std.fs.path.join(arena, &.{ dir, file.name });
+            const out = Io.Dir.cwd().createFile(io, path, .{}) catch |err|
+                return d.fatal("failed to create output file '{s}': {s}", .{ path, aro.Driver.errorDescription(err) });
+            defer out.close(io);
+            var file_buf: [4096]u8 = undefined;
+            var writer = out.writer(io, &file_buf);
+            writer.interface.writeAll(file.text) catch {};
+            writer.interface.flush() catch {};
+            if (writer.err) |write_err|
+                return d.fatal("failed to write '{s}': {s}", .{ path, aro.Driver.errorDescription(write_err) });
+        }
+    }
 
     var close_out_file = false;
     var out_file_path: []const u8 = "<stdout>";

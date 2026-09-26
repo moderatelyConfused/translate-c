@@ -87,6 +87,11 @@ pub const Options = struct {
     /// generated, which also happens automatically when the translated header
     /// contains Objective-C declarations.
     objc_module: ?*Build.Module = null,
+    /// With `objc`, write the wrapper of every Objective-C class and protocol
+    /// to a file of its own (in a directory next to the generated root file)
+    /// instead of one huge file. The module is the same either way, but
+    /// editors and ZLS stay responsive on large frameworks such as Cocoa.
+    objc_split: bool = true,
 };
 
 pub fn init(translate_c_dep: *Build.Dependency, options: Options) Translator {
@@ -155,6 +160,11 @@ pub fn initInner(
     });
 
     if (options.objc) run.addArg("-fobjc");
+    if (options.objc and options.objc_split) {
+        // Both outputs of the run step share one directory, which lets the
+        // root file import the wrappers relatively.
+        _ = run.addPrefixedOutputDirectoryArg("-fobjc-dir=", b.fmt("{s}.objc", .{name}));
+    }
     if (options.objc_module) |objc_module| mod.addImport("objc", objc_module);
 
     addFlag(run, "module-libs", options.module_libs);
