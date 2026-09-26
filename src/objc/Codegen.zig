@@ -370,14 +370,16 @@ fn emitPrelude(cg: *Codegen) Error!void {
         \\    /// Helpers shared by all class wrapper types.
         \\    pub fn ClassHelpers(comptime Self: type, comptime name: [:0]const u8) type {
         \\        return struct {
+        \\            // The cache must live in this struct, which is distinct for every
+        \\            // `Self`/`name`; a struct declared inside `objcClass` would capture
+        \\            // nothing and be shared by all wrapper types.
+        \\            var cached_class: objc.c.Class = null;
+        \\
         \\            /// The Objective-C class object, looked up once and cached.
         \\            pub fn objcClass() objc.Class {
-        \\                const S = struct {
-        \\                    var cached: objc.c.Class = null;
-        \\                };
-        \\                if (S.cached) |ptr| return .{ .value = ptr };
+        \\                if (cached_class) |ptr| return .{ .value = ptr };
         \\                const cls = classNamed(name);
-        \\                S.cached = cls.value;
+        \\                cached_class = cls.value;
         \\                return cls;
         \\            }
         \\
@@ -1064,4 +1066,29 @@ fn typeText(cg: *Codegen, node: ZigNode) Error![]const u8 {
     var body = text[prefix.len..];
     if (mem.endsWith(u8, body, ";")) body = body[0 .. body.len - 1];
     return cg.arena.dupe(u8, body);
+}
+
+// The generated `__objc.ClassHelpers` caches the class object in a container
+// level `var` of the struct it returns. That struct captures `Self` and `name`,
+// so every wrapper type gets its own cache. A struct declared inside the
+// function body would capture nothing and be shared by all instantiations.
+test "per-instantiation class cache pattern" {
+    const Helpers = struct {
+        fn ClassHelpers(comptime Self: type, comptime name: []const u8) type {
+            return struct {
+                var cached: ?[]const u8 = null;
+                fn class() []const u8 {
+                    if (cached) |c| return c;
+                    cached = name;
+                    _ = Self;
+                    return name;
+                }
+            };
+        }
+    };
+    const A = opaque {};
+    const B = opaque {};
+    try std.testing.expectEqualStrings("A", Helpers.ClassHelpers(A, "A").class());
+    try std.testing.expectEqualStrings("B", Helpers.ClassHelpers(B, "B").class());
+    try std.testing.expectEqualStrings("A", Helpers.ClassHelpers(A, "A").class());
 }

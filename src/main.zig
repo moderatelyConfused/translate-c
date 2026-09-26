@@ -603,6 +603,7 @@ comptime {
         _ = @import("helpers.zig");
         _ = @import("PatternList.zig");
         _ = ObjcRewriter;
+        _ = @import("objc/Codegen.zig");
     }
 }
 
