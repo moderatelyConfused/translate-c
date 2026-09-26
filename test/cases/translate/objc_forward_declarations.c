@@ -5,7 +5,11 @@ extern NSString *const NSFooKey;
 extern NSNotificationName const NSDidThing;
 void NSLog(NSString *format, ...);
 NSArray *make_array(id<NSCoding> obj, NSString * _Nonnull nonnull_string);
-struct wrapper { NSString *name; id object; };
+id<NSCoding> _Nullable current_coder(void);
+id<NSCoding> _Nonnull required_coder(void);
+id<NSUndeclaredProtocol> unknown_protocol(void);
+typedef id<NSCoding, NSObject> CoderToken;
+struct wrapper { NSString *name; id object; CoderToken token; };
 
 // translate
 // args=-fobjc
@@ -15,10 +19,15 @@ struct wrapper { NSString *name; id object; };
 // pub extern const NSFooKey: ?*NSString;
 // pub extern const NSDidThing: NSNotificationName;
 // pub extern fn NSLog(format: ?*NSString, ...) void;
-// pub extern fn make_array(obj: id, nonnull_string: *NSString) ?*NSArray;
+// pub extern fn make_array(obj: ?*NSCoding, nonnull_string: *NSString) ?*NSArray;
+// pub extern fn current_coder() ?*NSCoding;
+// pub extern fn required_coder() *NSCoding;
+// pub extern fn unknown_protocol() id;
+// pub const CoderToken = ?*NSCoding;
 // pub const struct_wrapper = extern struct {
 //     name: ?*NSString,
 //     object: id,
+//     token: CoderToken,
 // };
 //
 // /// Objective-C class `NSString` (forward declaration only)

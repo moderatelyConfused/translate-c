@@ -73,6 +73,8 @@ timing: bool = false,
 /// Type context of the `@interface`/`@protocol` whose members are being
 /// parsed, so that C declarations inside it can use its generic parameters.
 member_type_ctx: ?TypeCtx = null,
+/// Protocols for which a `__objc_proto_<name>` typedef was emitted.
+proto_typedefs: std.StringHashMapUnmanaged(void) = .empty,
 
 const Item = struct {
     tag: enum(u8) { orig, synth },
@@ -181,6 +183,22 @@ fn deinit(r: *Rewriter) void {
     r.cur.deinit(r.gpa);
     r.hoisted.deinit(r.gpa);
     r.synth.deinit(r.gpa);
+    r.proto_typedefs.deinit(r.gpa);
+}
+
+/// `id<P>` is rewritten to `__objc_proto_P *`, a pointer to a synthetic typedef
+/// that the translator maps to the protocol's wrapper type. Returns null for
+/// protocols that are not declared (yet).
+fn protocolTypedef(r: *Rewriter, protocol: []const u8) Error!?[]const u8 {
+    if (!r.model.protocols.contains(protocol)) return null;
+    const name = try std.fmt.allocPrint(r.model.arena, "__objc_proto_{s}", .{protocol});
+    const gop = try r.proto_typedefs.getOrPut(r.gpa, name);
+    if (!gop.found_existing) {
+        const decl = try std.fmt.allocPrint(r.gpa, "typedef struct objc_object {s};", .{name});
+        defer r.gpa.free(decl);
+        try r.synthHoist(decl);
+    }
+    return name;
 }
 
 // =========================
@@ -546,6 +564,24 @@ fn scanToken(r: *Rewriter) Error!void {
                     // `NSArray<NSString *> *` / `id<NSCopying>` in C declarations.
                     if (r.at(r.i + 1) == .angle_bracket_left and r.isObjcTypeName(r.slice(r.i))) {
                         if (r.matchAngle(r.i + 1)) |close| {
+                            if (mem.eql(u8, r.slice(r.i), "id") and isIdentifier(r.at(r.i + 2))) {
+                                if (try r.protocolTypedef(r.slice(r.i + 2))) |typedef_name| {
+                                    // A qualifier written before `id` must follow the `*`.
+                                    var qualifier: []const u8 = "";
+                                    if (r.cur.items.len != 0) {
+                                        const prev = r.cur.items[r.cur.items.len - 1];
+                                        if (prev.tag == .orig and isNullabilityKeyword(r.ids[prev.start])) {
+                                            qualifier = r.slice(prev.start);
+                                            r.cur.items.len -= 1;
+                                        }
+                                    }
+                                    const text = try std.fmt.allocPrint(r.gpa, "{s} * {s}", .{ typedef_name, qualifier });
+                                    defer r.gpa.free(text);
+                                    try r.synthCur(text);
+                                    r.i = close + 1;
+                                    return;
+                                }
+                            }
                             try r.emitOrig(r.i);
                             r.i = close + 1;
                             r.changed = true;
@@ -1713,6 +1749,24 @@ fn nullabilityOfQualifier(s: []const u8) Model.Nullability {
     return .nullable;
 }
 
+fn isNullabilityQualifierText(s: []const u8) bool {
+    return mem.eql(u8, s, "_Nullable") or mem.eql(u8, s, "_Nonnull") or
+        mem.eql(u8, s, "_Null_unspecified") or mem.eql(u8, s, "_Nullable_result");
+}
+
+/// `instancetype` and `id<P>` are typedef'd pointers that may carry a
+/// nullability qualifier in front of them (`_Nonnull instancetype`). After
+/// they are replaced by `Name *`, such a qualifier has to follow the `*`.
+/// Call this after the replacement, with `type_start` the index of the first
+/// piece of the replacement.
+fn relocatePrefixQualifier(r: *Rewriter, pieces: *std.ArrayList([]const u8), type_start: usize) Error!void {
+    if (type_start == 0) return;
+    const qualifier = pieces.items[type_start - 1];
+    if (!isNullabilityQualifierText(qualifier)) return;
+    _ = pieces.orderedRemove(type_start - 1);
+    try pieces.append(r.gpa, qualifier);
+}
+
 /// Rewrites the type spelled by the tokens `[start, end)` into C.
 fn rewriteType(r: *Rewriter, start: u32, end: u32, ctx: TypeCtx) Error!TypeResult {
     var res: TypeResult = .{};
@@ -1748,6 +1802,7 @@ fn rewriteType(r: *Rewriter, start: u32, end: u32, ctx: TypeCtx) Error!TypeResul
                 };
                 const last = if (res.pieces.items.len != 0) res.pieces.items[res.pieces.items.len - 1] else "";
                 if (mem.eql(u8, last, "id") or mem.eql(u8, last, "Class")) {
+                    const first_protocol = res.protocols.items.len;
                     var k = j + 1;
                     var inner: u32 = 0;
                     while (k < close) : (k += 1) {
@@ -1757,6 +1812,15 @@ fn rewriteType(r: *Rewriter, start: u32, end: u32, ctx: TypeCtx) Error!TypeResul
                             else => if (inner == 0 and isIdentifier(r.ids[k])) {
                                 try res.protocols.append(r.gpa, try r.model.arena.dupe(u8, r.slice(k)));
                             },
+                        }
+                    }
+                    // `id<P>` becomes a pointer to the protocol's synthetic typedef.
+                    if (mem.eql(u8, last, "id") and res.protocols.items.len > first_protocol) {
+                        if (try r.protocolTypedef(res.protocols.items[first_protocol])) |typedef_name| {
+                            const type_start = res.pieces.items.len - 1;
+                            res.pieces.items[type_start] = typedef_name;
+                            try res.pieces.append(r.gpa, "*");
+                            try r.relocatePrefixQualifier(&res.pieces, type_start);
                         }
                     }
                 }
@@ -1801,7 +1865,9 @@ fn rewriteType(r: *Rewriter, start: u32, end: u32, ctx: TypeCtx) Error!TypeResul
                         continue;
                     }
                     if (mem.eql(u8, s, "instancetype")) {
+                        const type_start = res.pieces.items.len;
                         try res.pieces.appendSlice(r.gpa, ctx.self_type);
+                        try r.relocatePrefixQualifier(&res.pieces, type_start);
                         res.is_instancetype = true;
                         j += 1;
                         continue;

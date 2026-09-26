@@ -210,13 +210,9 @@ fn assignWrapperNames(cg: *Codegen) Error!void {
         try cg.type_names.put(cg.gpa, class.name, {});
     }
     for (cg.model.protocols.values()) |protocol| {
-        var name = protocol.name;
-        if (cg.reserved.contains(name)) {
-            name = try std.fmt.allocPrint(cg.arena, "{s}Protocol", .{protocol.name});
-            while (cg.reserved.contains(name)) {
-                name = try std.fmt.allocPrint(cg.arena, "{s}_", .{name});
-            }
-        }
+        // Chosen by the translator, which needs the names while translating
+        // C declarations that mention `id<P>`.
+        const name = cg.t.objc_protocol_names.get(protocol.name) orelse protocol.name;
         try cg.protocol_names.put(cg.gpa, protocol.name, name);
         try cg.reserved.put(cg.gpa, name, {});
         try cg.type_names.put(cg.gpa, name, {});
@@ -992,6 +988,12 @@ fn classify(cg: *Codegen, qt: QualType, info: Model.TypeInfo, assume_nonnull: bo
                 switch (p.child.type(comp)) {
                     .typedef => |td| {
                         const name = td.name.lookup(comp);
+                        if (mem.cutPrefix(u8, name, "__objc_proto_")) |protocol| {
+                            if (cg.protocol_names.get(protocol)) |zig_name| {
+                                const zig = try std.fmt.allocPrint(cg.arena, "{s}*{f}", .{ if (nullable) "?" else "", fmtId(zig_name) });
+                                return .{ .zig = zig, .abi = zig, .kind = .object, .nullable = nullable };
+                            }
+                        }
                         if (cg.model.classes.contains(name)) {
                             const zig = try std.fmt.allocPrint(cg.arena, "{s}*{f}", .{ if (nullable) "?" else "", fmtId(cg.classZigName(name)) });
                             return .{ .zig = zig, .abi = zig, .kind = .object, .nullable = nullable };

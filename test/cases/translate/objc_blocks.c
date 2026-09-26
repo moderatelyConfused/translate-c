@@ -7,6 +7,7 @@ struct holder {
     void (^on_done)(void);
 };
 @class NSString, NSDictionary;
+@protocol NSCopying;
 
 @interface NSObject
 @end
@@ -18,6 +19,7 @@ struct holder {
 - (dispatch_block_t)makeBlock;
 - (void)nested:(void (^)(void (^inner)(int)))outer;
 - (void)enumerateAttributes:(void (^)(NSDictionary<NSString *, id> *attrs, NSUInteger idx, BOOL *stop))block;
+- (void)withCopying:(void (^)(id<NSCopying> _Nullable item, id<NSCopying> _Nonnull other))block;
 @end
 
 // translate
@@ -44,3 +46,5 @@ struct holder {
 //         pub fn nested(self: *Self, outer: __objc.Block(fn (inner: __objc.Block(fn (c_int) callconv(.c) void)) callconv(.c) void)) void {
 //
 //         pub fn enumerateAttributes(self: *Self, block: __objc.Block(fn (attrs: ?*NSDictionary, idx: NSUInteger, stop: [*c]BOOL) callconv(.c) void)) void {
+//
+//         pub fn withCopying(self: *Self, block: __objc.Block(fn (item: ?*NSCopying, other: *NSCopying) callconv(.c) void)) void {

@@ -119,8 +119,10 @@ mutable.release();                                     // - (oneway void)release
 - Properties produce a getter and, unless `readonly`, a `setXxx` setter,
   honouring `getter=`/`setter=`.
 - `id` is `objc.Object` (or `?objc.Object`); `id<Protocol>` is a pointer to
-  the protocol's wrapper type; `Class` and `SEL` are `objc.Class` and
-  `objc.Sel`; structs, enums and other C types translate as usual.
+  the protocol's wrapper type, also in C declarations such as
+  `id<MTLDevice> MTLCreateSystemDefaultDevice(void)`; `Class` and `SEL` are
+  `objc.Class` and `objc.Sel`; structs, enums and other C types translate as
+  usual.
 - Blocks are `__objc.Block(fn (Args...) callconv(.c) Ret)`, an `extern struct`
   holding the block pointer. `Block.Type(Captures)` is the matching
   `objc.Block(...)` type from zig-objc, `Block.init(&context)` wraps a block

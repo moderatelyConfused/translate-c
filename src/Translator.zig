@@ -159,6 +159,9 @@ wip_var_inits: std.AutoHashMapUnmanaged(Node.Index, void) = .empty,
 /// Objective-C rewriter, keyed by the name of the block struct they belong to.
 block_sigs: std.StringHashMapUnmanaged(QualType) = .empty,
 block_sigs_collected: bool = false,
+/// Objective-C protocol name -> name of its Zig wrapper type. Protocols that
+/// collide with a class or C declaration get a `Protocol` suffix.
+objc_protocol_names: std.StringHashMapUnmanaged([]const u8) = .empty,
 
 pub fn getMangle(t: *Translator) u32 {
     t.mangle_count += 1;
@@ -304,9 +307,11 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
         translator.global_scope.deinit();
         translator.wip_var_inits.deinit(gpa);
         translator.block_sigs.deinit(gpa);
+        translator.objc_protocol_names.deinit(gpa);
     }
 
     try translator.prepopulateGlobalNameTable();
+    try translator.assignObjcProtocolNames();
     try translator.transTopLevelDecls();
 
     // Insert empty line before macros.
@@ -371,7 +376,24 @@ pub fn translate(options: Options) mem.Allocator.Error![]u8 {
 fn isObjcSyntheticName(name: []const u8) bool {
     return mem.startsWith(u8, name, "__objc_m_") or
         mem.startsWith(u8, name, "__objc_blocksig_") or
-        mem.startsWith(u8, name, "__objc_block_");
+        mem.startsWith(u8, name, "__objc_block_") or
+        mem.startsWith(u8, name, "__objc_proto_");
+}
+
+/// Picks collision free names for the protocol wrapper types. Class names are
+/// taken by the C typedefs that stand in for them.
+fn assignObjcProtocolNames(t: *Translator) Error!void {
+    const model = t.objc_model orelse return;
+    for (model.protocols.values()) |protocol| {
+        var name = protocol.name;
+        if (model.classes.contains(name) or t.global_names.contains(name) or t.weak_global_names.contains(name)) {
+            name = try std.fmt.allocPrint(t.arena, "{s}Protocol", .{protocol.name});
+            while (model.classes.contains(name) or t.global_names.contains(name) or t.weak_global_names.contains(name)) {
+                name = try std.fmt.allocPrint(t.arena, "{s}_", .{name});
+            }
+        }
+        try t.objc_protocol_names.put(t.gpa, protocol.name, name);
+    }
 }
 
 /// Objective-C runtime types that are aliased to zig-objc's own translation of
@@ -432,14 +454,20 @@ fn transObjcPointer(t: *Translator, pointer_ty: Type.Pointer, source_loc: TokenI
     switch (child.type(t.comp)) {
         .typedef => |typedef_ty| {
             const name = typedef_ty.name.lookup(t.comp);
-            if (!model.classes.contains(name)) return null;
+            // `id<P>` was rewritten to a pointer to `__objc_proto_P`.
+            const wrapper = if (mem.cutPrefix(u8, name, "__objc_proto_")) |protocol|
+                t.objc_protocol_names.get(protocol) orelse return null
+            else if (model.classes.contains(name))
+                name
+            else
+                return null;
             // Objects are always mutable and cannot be indexed, so translate
             // `Foo *` as a single pointer to the wrapper type.
             const ptr = try ZigTag.single_pointer.create(t.arena, .{
                 .is_const = false,
                 .is_volatile = false,
                 .is_allowzero = false,
-                .elem_type = try ZigTag.identifier.create(t.arena, name),
+                .elem_type = try ZigTag.identifier.create(t.arena, wrapper),
             });
             if (pointer_ty.nullability == .nonnull) return ptr;
             return try ZigTag.optional_type.create(t.arena, ptr);

@@ -1,4 +1,6 @@
 @class NSString, NSError;
+@protocol NSCopying;
+typedef void (^NSItemProviderCompletionHandler)(_Nullable __kindof id <NSCopying> item, NSError * _Null_unspecified error);
 
 @interface NSObject
 @end
@@ -13,6 +15,8 @@ _Pragma("clang assume_nonnull begin")
 - (nullable id)nullableId:(nullable Class)cls sel:(nullable SEL)sel;
 - (BOOL)tryWithError:(NSError * _Nullable * _Nullable)error;
 - (nonnull NSString *)stillNonnull;
++ (_Nonnull instancetype)prefixNonnull;
+- (void)prefixed:(_Nullable __kindof id<NSCopying>)item other:(_Nullable id)obj;
 @end
 
 _Pragma("clang assume_nonnull end")
@@ -46,6 +50,12 @@ _Pragma("clang assume_nonnull end")
 //             return __objc.fromBOOL(__objc.msgSend(self, objc.c.BOOL, "tryWithError:", .{@"error"}));
 //
 //         pub fn stillNonnull(self: *Self) *NSString {
+//
+//         pub fn prefixNonnull() *Self {
+//
+//         pub fn prefixed_other(self: *Self, item: ?*NSCopying, obj: ?objc.Object) void {
+//
+// pub const NSItemProviderCompletionHandler = __objc.Block(fn (item: ?*NSCopying, @"error": ?*NSError) callconv(.c) void);
 //
 //         pub fn implicitNullable(self: *Self, arg: ?*NSString) ?*NSString {
 //
