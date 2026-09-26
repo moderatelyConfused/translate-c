@@ -8,17 +8,17 @@
     .minimum_zig_version = "0.16.0",
 
     .dependencies = .{
-        // A vendored fork of https://github.com/vancluever/arocc (commit
+        // A fork of https://github.com/vancluever/arocc (commit
         // f97cdfc3779aec4b242299e2fc9a1c828c3547c6) with Objective-C related
-        // patches; see deps/aro/PATCHES.md.
+        // patches; see PATCHES.md in that repository.
         .aro = .{
-            .path = "deps/aro",
+            .url = "https://github.com/moderatelyConfused/aro/archive/6b40df837877c9a68a60fccd4c99eaa912a37746.tar.gz",
+            .hash = "aro-0.0.0-JSD1Qsy9NgCjFUZI8gwMe7Pv4HNl0PdwW_lShDPIq10c",
         },
     },
 
     .paths = .{
         "build",
-        "deps",
         "build.zig",
         "build.zig.zon",
         "src",

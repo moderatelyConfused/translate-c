@@ -142,10 +142,11 @@ Objective-C bindings a block type is an opaque `?*const anyopaque`.
 
 ### Implementation notes
 
-Aro, the C frontend, only parses C. This fork vendors a lightly patched copy of
-it in [`deps/aro`](deps/aro/PATCHES.md) (`#import`, an `@` token, `-x
-objective-c`) and rewrites the Objective-C declarations of the preprocessed
-token stream into plain C before parsing ([`src/objc/Rewriter.zig`](src/objc/Rewriter.zig)):
+Aro, the C frontend, only parses C. This fork depends on a lightly patched
+fork of it, [moderatelyConfused/aro](https://github.com/moderatelyConfused/aro)
+(`#import`, an `@` token, `-x objective-c`; see its `PATCHES.md`), and rewrites
+the Objective-C declarations of the preprocessed token stream into plain C
+before parsing ([`src/objc/Rewriter.zig`](src/objc/Rewriter.zig)):
 classes become typedefs, methods and properties become prototypes that carry
 their types, and blocks become pointers to synthetic structs. The recorded
 declarations ([`src/objc/Model.zig`](src/objc/Model.zig)) are then turned into
